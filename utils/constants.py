@@ -1,0 +1,67 @@
+"""
+Constants used throughout the application.
+"""
+
+# Invoice Status
+INVOICE_STATUS_DRAFT = 'DRAFT'
+INVOICE_STATUS_SENT = 'SENT'
+INVOICE_STATUS_PAID = 'PAID'
+INVOICE_STATUS_OVERDUE = 'OVERDUE'
+INVOICE_STATUS_CANCELLED = 'CANCELLED'
+
+INVOICE_STATUS_CHOICES = [
+    (INVOICE_STATUS_DRAFT, 'Draft'),
+    (INVOICE_STATUS_SENT, 'Sent'),
+    (INVOICE_STATUS_PAID, 'Paid'),
+    (INVOICE_STATUS_OVERDUE, 'Overdue'),
+    (INVOICE_STATUS_CANCELLED, 'Cancelled'),
+]
+
+# Payment Gateway
+PAYMENT_GATEWAY_STRIPE = 'stripe'
+PAYMENT_GATEWAY_SSLCOMMERZ = 'sslcommerz'
+
+PAYMENT_GATEWAY_CHOICES = [
+    (PAYMENT_GATEWAY_STRIPE, 'Stripe'),
+    (PAYMENT_GATEWAY_SSLCOMMERZ, 'SSLCommerz'),
+]
+
+# Payment Status
+PAYMENT_STATUS_PENDING = 'pending'
+PAYMENT_STATUS_PROCESSING = 'processing'
+PAYMENT_STATUS_COMPLETED = 'completed'
+PAYMENT_STATUS_FAILED = 'failed'
+PAYMENT_STATUS_CANCELLED = 'cancelled'
+PAYMENT_STATUS_REFUNDED = 'refunded'
+
+PAYMENT_STATUS_CHOICES = [
+    (PAYMENT_STATUS_PENDING, 'Pending'),
+    (PAYMENT_STATUS_PROCESSING, 'Processing'),
+    (PAYMENT_STATUS_COMPLETED, 'Completed'),
+    (PAYMENT_STATUS_FAILED, 'Failed'),
+    (PAYMENT_STATUS_CANCELLED, 'Cancelled'),
+    (PAYMENT_STATUS_REFUNDED, 'Refunded'),
+]
+
+# Currency Codes (ISO 4217)
+CURRENCY_USD = 'USD'
+CURRENCY_EUR = 'EUR'
+CURRENCY_GBP = 'GBP'
+CURRENCY_BDT = 'BDT'  # Bangladeshi Taka for SSLCommerz
+
+SUPPORTED_CURRENCIES = [
+    CURRENCY_USD,
+    CURRENCY_EUR,
+    CURRENCY_GBP,
+    CURRENCY_BDT,
+]
+
+# Cache Keys
+CACHE_KEY_DASHBOARD_STATS = 'dashboard_stats_{user_id}'
+CACHE_KEY_RECENT_INVOICES = 'recent_invoices_{user_id}'
+CACHE_KEY_CLIENT_LIST = 'client_list_{user_id}'
+
+# Cache Timeouts (in seconds)
+CACHE_TIMEOUT_DASHBOARD = 600  # 10 minutes
+CACHE_TIMEOUT_RECENT_INVOICES = 300  # 5 minutes
+CACHE_TIMEOUT_CLIENT_LIST = 300  # 5 minutes
