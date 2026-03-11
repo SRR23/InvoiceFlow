@@ -16,6 +16,7 @@ A production-ready Django REST Framework backend for a SaaS invoice and billing 
 - ✅ Redis caching
 - ✅ Scheduled tasks (Celery Beat)
 - ✅ Separate settings for development and production
+- ✅ **Interactive API Documentation (Swagger/OpenAPI)**
 
 ## Tech Stack
 
@@ -26,6 +27,7 @@ A production-ready Django REST Framework backend for a SaaS invoice and billing 
 - **Task Queue**: Celery with Redis broker
 - **Payment Gateways**: Stripe, SSLCommerz
 - **API**: RESTful API with DRF
+- **API Documentation**: drf-spectacular (Swagger/OpenAPI)
 
 ## Project Structure
 
@@ -126,6 +128,46 @@ celery -A config worker -l info
 ```bash
 celery -A config beat -l info
 ```
+
+## API Documentation
+
+The project includes interactive API documentation using Swagger/OpenAPI.
+
+### Access API Documentation
+
+Once the server is running, visit:
+
+- **Swagger UI**: http://localhost:8000/api/docs/
+  - Interactive API documentation with "Try it out" feature
+  - Test endpoints directly from the browser
+  - Includes authentication support
+
+- **ReDoc**: http://localhost:8000/api/redoc/
+  - Clean, responsive documentation interface
+  - Better for reading and understanding API structure
+
+- **OpenAPI Schema (JSON)**: http://localhost:8000/api/schema/
+  - Raw OpenAPI 3.0 schema
+  - Can be imported into Postman, Insomnia, or other API clients
+
+### Using Swagger UI
+
+1. **Authentication**: 
+   - Click "Authorize" button at the top
+   - Enter: `Bearer YOUR_ACCESS_TOKEN`
+   - Token can be obtained from `/api/auth/login/` endpoint
+
+2. **Testing Endpoints**:
+   - Click on any endpoint to expand
+   - Click "Try it out" button
+   - Fill in required parameters
+   - Click "Execute" to send request
+   - View response below
+
+3. **Schema Details**:
+   - All request/response schemas are automatically generated
+   - View model definitions and field descriptions
+   - See example values and validation rules
 
 ## API Endpoints
 

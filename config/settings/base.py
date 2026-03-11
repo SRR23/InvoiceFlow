@@ -28,6 +28,7 @@ THIRD_PARTY_APPS = [
     'corsheaders',
     'django_celery_beat',
     'django_celery_results',
+    'drf_spectacular',  # API documentation
 ]
 
 LOCAL_APPS = [
@@ -143,6 +144,7 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.MultiPartParser',
     ],
     'EXCEPTION_HANDLER': 'utils.exceptions.custom_exception_handler',
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 # JWT Configuration
@@ -253,5 +255,39 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+    },
+}
+
+# API Documentation (Swagger/OpenAPI) Configuration
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'InvoiceFlow API',
+    'DESCRIPTION': 'SaaS Invoice & Billing Platform API Documentation',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SCHEMA_PATH_PREFIX': '/api/',
+    'AUTHENTICATION_WHITELIST': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'persistAuthorization': True,
+        'displayOperationId': False,
+        'defaultModelsExpandDepth': 2,
+        'defaultModelExpandDepth': 2,
+        'docExpansion': 'list',
+        'filter': True,
+        'showExtensions': True,
+        'showCommonExtensions': True,
+    },
+    'SWAGGER_UI_FAVICON_HREF': '/static/favicon.ico',
+    'REDOC_UI_SETTINGS': {
+        'hideDownloadButton': False,
+        'expandResponses': '200,201',
+        'pathInMiddlePanel': True,
+        'hideHostname': False,
+        'nativeScrollbars': False,
+        'requiredPropsFirst': True,
+        'sortPropsAlphabetically': True,
     },
 }

@@ -1,12 +1,13 @@
 """
 Views for Payment processing and webhooks.
 """
-from rest_framework import viewsets, status, generics
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework import viewsets, status
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+from drf_spectacular.utils import extend_schema, OpenApiResponse
 from utils.permissions import IsBusinessUser
 from .models import Payment, WebhookEvent
 from .serializers import PaymentSerializer, WebhookEventSerializer
@@ -26,77 +27,144 @@ class PaymentViewSet(viewsets.ReadOnlyModelViewSet):
         return Payment.objects.filter(invoice__user=self.request.user).select_related('invoice')
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, IsBusinessUser])
-def create_stripe_payment(request):
+@extend_schema(
+    tags=['Payments'],
+    summary='Create Stripe payment',
+    description='Create a Stripe checkout session for an invoice.',
+    request={
+        'type': 'object',
+        'properties': {
+            'invoice_id': {'type': 'integer'},
+        },
+        'required': ['invoice_id']
+    },
+    responses={
+        200: OpenApiResponse(
+            description='Checkout session created',
+            response={
+                'type': 'object',
+                'properties': {
+                    'checkout_url': {'type': 'string', 'format': 'uri'},
+                    'invoice_id': {'type': 'integer'},
+                }
+            }
+        ),
+        400: OpenApiResponse(description='Invalid request or invoice already paid'),
+        404: OpenApiResponse(description='Invoice not found'),
+    }
+)
+class CreateStripePaymentView(APIView):
     """Create a Stripe checkout session for an invoice."""
-    invoice_id = request.data.get('invoice_id')
+    permission_classes = [IsAuthenticated, IsBusinessUser]
     
-    if not invoice_id:
-        return Response(
-            {'error': 'invoice_id is required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    try:
-        from apps.invoices.models import Invoice
-        invoice = Invoice.objects.get(id=invoice_id, user=request.user)
+    def post(self, request):
+        invoice_id = request.data.get('invoice_id')
         
-        if invoice.status == 'PAID':
+        if not invoice_id:
             return Response(
-                {'error': 'Invoice is already paid'},
+                {'error': 'invoice_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Create Stripe checkout session
-        checkout_url = StripeService.create_checkout_session(invoice)
-        
-        return Response({
-            'checkout_url': checkout_url,
-            'invoice_id': invoice.id
-        })
-    except Invoice.DoesNotExist:
-        return Response(
-            {'error': 'Invoice not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+        try:
+            from apps.invoices.models import Invoice
+            invoice = Invoice.objects.get(id=invoice_id, user=request.user)
+            
+            if invoice.status == 'PAID':
+                return Response(
+                    {'error': 'Invoice is already paid'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create Stripe checkout session
+            checkout_url = StripeService.create_checkout_session(invoice)
+            
+            return Response({
+                'checkout_url': checkout_url,
+                'invoice_id': invoice.id
+            })
+        except Invoice.DoesNotExist:
+            return Response(
+                {'error': 'Invoice not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, IsBusinessUser])
-def create_sslcommerz_payment(request):
+@extend_schema(
+    tags=['Payments'],
+    summary='Create SSLCommerz payment',
+    description='Create an SSLCommerz payment session for an invoice.',
+    request={
+        'type': 'object',
+        'properties': {
+            'invoice_id': {'type': 'integer'},
+        },
+        'required': ['invoice_id']
+    },
+    responses={
+        200: OpenApiResponse(
+            description='Payment session created',
+            response={
+                'type': 'object',
+                'properties': {
+                    'redirect_url': {'type': 'string', 'format': 'uri'},
+                    'payment_data': {'type': 'object'},
+                }
+            }
+        ),
+        400: OpenApiResponse(description='Invalid request or invoice already paid'),
+        404: OpenApiResponse(description='Invoice not found'),
+    }
+)
+class CreateSSLCommerzPaymentView(APIView):
     """Create an SSLCommerz payment session for an invoice."""
-    invoice_id = request.data.get('invoice_id')
+    permission_classes = [IsAuthenticated, IsBusinessUser]
     
-    if not invoice_id:
-        return Response(
-            {'error': 'invoice_id is required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    try:
-        from apps.invoices.models import Invoice
-        invoice = Invoice.objects.get(id=invoice_id, user=request.user)
+    def post(self, request):
+        invoice_id = request.data.get('invoice_id')
         
-        if invoice.status == 'PAID':
+        if not invoice_id:
             return Response(
-                {'error': 'Invoice is already paid'},
+                {'error': 'invoice_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Create SSLCommerz payment session
-        payment_data = SSLCommerzService.create_payment_session(invoice)
-        
-        return Response(payment_data)
-    except Invoice.DoesNotExist:
-        return Response(
-            {'error': 'Invoice not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+        try:
+            from apps.invoices.models import Invoice
+            invoice = Invoice.objects.get(id=invoice_id, user=request.user)
+            
+            if invoice.status == 'PAID':
+                return Response(
+                    {'error': 'Invoice is already paid'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create SSLCommerz payment session
+            payment_data = SSLCommerzService.create_payment_session(invoice)
+            
+            return Response(payment_data)
+        except Invoice.DoesNotExist:
+            return Response(
+                {'error': 'Invoice not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
 
+@extend_schema(
+    tags=['Webhooks'],
+    summary='Stripe webhook',
+    description='Handle Stripe webhook events. This endpoint is called by Stripe.',
+    request={
+        'type': 'object',
+        'description': 'Stripe webhook payload'
+    },
+    responses={
+        200: OpenApiResponse(description='Webhook received and processed'),
+    },
+    exclude=True  # Hide from Swagger UI as it's for external services
+)
 @method_decorator(csrf_exempt, name='dispatch')
-class StripeWebhookView(generics.GenericAPIView):
+class StripeWebhookView(APIView):
     """Handle Stripe webhook events."""
     permission_classes = [AllowAny]
     
@@ -119,8 +187,21 @@ class StripeWebhookView(generics.GenericAPIView):
         return Response({'received': True})
 
 
+@extend_schema(
+    tags=['Webhooks'],
+    summary='SSLCommerz IPN',
+    description='Handle SSLCommerz IPN (Instant Payment Notification). This endpoint is called by SSLCommerz.',
+    request={
+        'type': 'object',
+        'description': 'SSLCommerz IPN payload'
+    },
+    responses={
+        200: OpenApiResponse(description='IPN received and processed'),
+    },
+    exclude=True  # Hide from Swagger UI as it's for external services
+)
 @method_decorator(csrf_exempt, name='dispatch')
-class SSLCommerzWebhookView(generics.GenericAPIView):
+class SSLCommerzWebhookView(APIView):
     """Handle SSLCommerz IPN (Instant Payment Notification)."""
     permission_classes = [AllowAny]
     

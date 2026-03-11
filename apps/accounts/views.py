@@ -1,23 +1,48 @@
 """
 Authentication views for user registration, login, and profile management.
 """
-from rest_framework import generics, status
+from rest_framework import status
+from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
+from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParameter
 from .models import User
 from .serializers import UserRegistrationSerializer, UserProfileSerializer
 
 
-class RegisterView(generics.CreateAPIView):
+@extend_schema(
+    tags=['Authentication'],
+    summary='Register a new user',
+    description='Create a new business user account. Returns JWT tokens for authentication.',
+    request=UserRegistrationSerializer,
+    responses={
+        201: OpenApiResponse(
+            description='User successfully created',
+            response={
+                'type': 'object',
+                'properties': {
+                    'user': UserProfileSerializer,
+                    'tokens': {
+                        'type': 'object',
+                        'properties': {
+                            'refresh': {'type': 'string'},
+                            'access': {'type': 'string'},
+                        }
+                    }
+                }
+            }
+        ),
+        400: OpenApiResponse(description='Validation error'),
+    }
+)
+class RegisterView(APIView):
     """User registration endpoint."""
-    queryset = User.objects.all()
     permission_classes = [AllowAny]
-    serializer_class = UserRegistrationSerializer
     
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+    def post(self, request):
+        serializer = UserRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         
@@ -33,7 +58,41 @@ class RegisterView(generics.CreateAPIView):
         }, status=status.HTTP_201_CREATED)
 
 
-class LoginView(generics.GenericAPIView):
+@extend_schema(
+    tags=['Authentication'],
+    summary='User login',
+    description='Authenticate user with email and password. Returns JWT tokens.',
+    request={
+        'type': 'object',
+        'properties': {
+            'email': {'type': 'string', 'format': 'email'},
+            'password': {'type': 'string', 'format': 'password'},
+        },
+        'required': ['email', 'password']
+    },
+    responses={
+        200: OpenApiResponse(
+            description='Login successful',
+            response={
+                'type': 'object',
+                'properties': {
+                    'user': UserProfileSerializer,
+                    'tokens': {
+                        'type': 'object',
+                        'properties': {
+                            'refresh': {'type': 'string'},
+                            'access': {'type': 'string'},
+                        }
+                    }
+                }
+            }
+        ),
+        400: OpenApiResponse(description='Email and password are required'),
+        401: OpenApiResponse(description='Invalid credentials'),
+        403: OpenApiResponse(description='User account is disabled'),
+    }
+)
+class LoginView(APIView):
     """User login endpoint with email and password."""
     permission_classes = [AllowAny]
     
@@ -73,7 +132,41 @@ class LoginView(generics.GenericAPIView):
         })
 
 
-class GoogleLoginView(generics.GenericAPIView):
+@extend_schema(
+    tags=['Authentication'],
+    summary='Google OAuth login',
+    description='Authenticate user with Google OAuth. Returns JWT tokens.',
+    request={
+        'type': 'object',
+        'properties': {
+            'google_id': {'type': 'string'},
+            'email': {'type': 'string', 'format': 'email'},
+            'first_name': {'type': 'string'},
+            'last_name': {'type': 'string'},
+        },
+        'required': ['google_id', 'email']
+    },
+    responses={
+        200: OpenApiResponse(
+            description='Login successful',
+            response={
+                'type': 'object',
+                'properties': {
+                    'user': UserProfileSerializer,
+                    'tokens': {
+                        'type': 'object',
+                        'properties': {
+                            'refresh': {'type': 'string'},
+                            'access': {'type': 'string'},
+                        }
+                    }
+                }
+            }
+        ),
+        400: OpenApiResponse(description='Google ID and email are required'),
+    }
+)
+class GoogleLoginView(APIView):
     """Google OAuth login endpoint."""
     permission_classes = [AllowAny]
     
@@ -121,7 +214,22 @@ class GoogleLoginView(generics.GenericAPIView):
         })
 
 
-class LogoutView(generics.GenericAPIView):
+@extend_schema(
+    tags=['Authentication'],
+    summary='User logout',
+    description='Logout user and blacklist refresh token.',
+    request={
+        'type': 'object',
+        'properties': {
+            'refresh_token': {'type': 'string'},
+        }
+    },
+    responses={
+        200: OpenApiResponse(description='Successfully logged out'),
+        400: OpenApiResponse(description='Invalid refresh token'),
+    }
+)
+class LogoutView(APIView):
     """User logout endpoint."""
     permission_classes = [IsAuthenticated]
     
@@ -136,10 +244,45 @@ class LogoutView(generics.GenericAPIView):
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class UserProfileView(generics.RetrieveUpdateAPIView):
+@extend_schema(
+    tags=['Authentication'],
+    summary='Get user profile',
+    description='Retrieve the authenticated user\'s profile information.',
+    responses={200: UserProfileSerializer}
+)
+class UserProfileView(APIView):
     """User profile view and update endpoint."""
     permission_classes = [IsAuthenticated]
-    serializer_class = UserProfileSerializer
     
-    def get_object(self):
-        return self.request.user
+    def get(self, request):
+        """Get user profile."""
+        serializer = UserProfileSerializer(request.user)
+        return Response(serializer.data)
+    
+    @extend_schema(
+        tags=['Authentication'],
+        summary='Update user profile',
+        description='Update the authenticated user\'s profile information.',
+        request=UserProfileSerializer,
+        responses={200: UserProfileSerializer}
+    )
+    def patch(self, request):
+        """Update user profile."""
+        serializer = UserProfileSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+    
+    @extend_schema(
+        tags=['Authentication'],
+        summary='Update user profile (full)',
+        description='Update all fields of the authenticated user\'s profile.',
+        request=UserProfileSerializer,
+        responses={200: UserProfileSerializer}
+    )
+    def put(self, request):
+        """Update user profile (full update)."""
+        serializer = UserProfileSerializer(request.user, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)

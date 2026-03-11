@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
+from drf_spectacular.utils import extend_schema_view, extend_schema, OpenApiResponse
 from utils.permissions import IsBusinessUser
 from .models import Invoice, InvoiceItem
 from .serializers import (
@@ -43,6 +44,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         """Set the user when creating a new invoice."""
         serializer.save(user=self.request.user)
     
+    @extend_schema(
+        tags=['Invoices'],
+        summary='Send invoice via email',
+        description='Send invoice to client via email. Triggers a Celery background task.',
+        responses={200: OpenApiResponse(description='Email queued successfully')}
+    )
     @action(detail=True, methods=['post'])
     def send_email(self, request, pk=None):
         """Send invoice via email (Celery task)."""
@@ -50,6 +57,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         # TODO: Trigger Celery task to send email
         return Response({'message': 'Invoice email will be sent shortly'})
     
+    @extend_schema(
+        tags=['Invoices'],
+        summary='Mark invoice as sent',
+        description='Mark an invoice as sent to the client.',
+        responses={200: InvoiceSerializer}
+    )
     @action(detail=True, methods=['post'])
     def mark_sent(self, request, pk=None):
         """Mark invoice as sent."""
@@ -58,6 +71,15 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice.save()
         return Response(InvoiceSerializer(invoice).data)
     
+    @extend_schema(
+        tags=['Invoices'],
+        summary='Cancel invoice',
+        description='Cancel an invoice. Cannot cancel paid invoices.',
+        responses={
+            200: InvoiceSerializer,
+            400: OpenApiResponse(description='Cannot cancel paid invoice')
+        }
+    )
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         """Cancel an invoice."""
@@ -96,6 +118,12 @@ class InvoiceItemViewSet(viewsets.ModelViewSet):
         serializer.save(invoice=invoice)
 
 
+@extend_schema(
+    tags=['Public'],
+    summary='View public invoice',
+    description='View invoice details using public UUID. No authentication required.',
+    responses={200: PublicInvoiceSerializer}
+)
 class PublicInvoiceView(generics.RetrieveAPIView):
     """
     Public endpoint for viewing invoice by public_id.
