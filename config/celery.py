@@ -1,6 +1,4 @@
-"""
-Celery configuration for InvoiceFlow project.
-"""
+
 import os
 from celery import Celery
 
