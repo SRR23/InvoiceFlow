@@ -2,6 +2,7 @@
 Base settings for InvoiceFlow project.
 Contains shared settings for both development and production.
 """
+import dj_database_url
 import os
 from pathlib import Path
 from datetime import timedelta
@@ -75,8 +76,29 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': os.environ.get('DB_NAME', 'invoiceflow'),
+#         'USER': os.environ.get('DB_USER', 'postgres'),
+#         'PASSWORD': os.environ.get('DB_PASSWORD', 'postgres'),
+#         'HOST': os.environ.get('DB_HOST', 'localhost'),
+#         'PORT': os.environ.get('DB_PORT', '5432'),
+#     }
+# }
+
+# Recommended: Use the full URL from Render (overrides everything else)
 DATABASES = {
-    'default': {
+    'default': dj_database_url.config(
+        default=os.environ.get('DATABASE_URL'),   # will be set on Render
+        conn_max_age=600,                         # keep connections alive ~10 min
+        ssl_require=True                          # important for Render external connections
+    )
+}
+
+# For local development fallback (when no DATABASE_URL is set)
+if not os.environ.get('DATABASE_URL'):
+    DATABASES['default'] = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.environ.get('DB_NAME', 'invoiceflow'),
         'USER': os.environ.get('DB_USER', 'postgres'),
@@ -84,7 +106,6 @@ DATABASES = {
         'HOST': os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '5432'),
     }
-}
 
 # Custom User Model
 AUTH_USER_MODEL = 'apps.accounts.User'
