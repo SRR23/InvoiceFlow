@@ -2,10 +2,15 @@
 Base settings for InvoiceFlow project.
 Contains shared settings for both development and production.
 """
-import dj_database_url
 import os
 from pathlib import Path
 from datetime import timedelta
+
+# Try to import dj_database_url for production deployments
+try:
+    import dj_database_url
+except ImportError:
+    dj_database_url = None
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -87,28 +92,31 @@ WSGI_APPLICATION = 'config.wsgi.application'
 #     }
 # }
 
-# Recommended: Use the full URL from Render (overrides everything else)
-DATABASES = {
-    'default': dj_database_url.config(
-        default=os.environ.get('DATABASE_URL'),   # will be set on Render
-        conn_max_age=600,                         # keep connections alive ~10 min
-        ssl_require=True                          # important for Render external connections
-    )
-}
-
-# For local development fallback (when no DATABASE_URL is set)
-if not os.environ.get('DATABASE_URL'):
-    DATABASES['default'] = {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME', 'invoiceflow'),
-        'USER': os.environ.get('DB_USER', 'postgres'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'postgres'),
-        'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
+# Database configuration
+# Try to use DATABASE_URL if available (for production deployments)
+if dj_database_url and os.environ.get('DATABASE_URL'):
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=os.environ.get('DATABASE_URL'),
+            conn_max_age=600,
+            ssl_require=True
+        )
+    }
+else:
+    # Local development configuration
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME', 'invoiceflow'),
+            'USER': os.environ.get('DB_USER', 'postgres'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', 'postgres'),
+            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+        }
     }
 
 # Custom User Model
-AUTH_USER_MODEL = 'apps.accounts.User'
+AUTH_USER_MODEL = 'accounts.User'
 
 # Password validation
 # https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
@@ -235,6 +243,10 @@ SSLCOMMERZ_IS_LIVE = os.environ.get('SSLCOMMERZ_IS_LIVE', 'False') == 'True'
 
 # Frontend URL for invoice links
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
 
 # Logging Configuration
 LOGGING = {
