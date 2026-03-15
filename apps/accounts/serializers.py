@@ -35,6 +35,19 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return user
 
 
+class LoginSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+    password = serializers.CharField(required=True, write_only=True, style={'input_type': 'password'})
+
+class LogoutSerializer(serializers.Serializer):
+    refresh_token = serializers.CharField(
+        required=True,
+        help_text="JWT refresh token to blacklist",
+        style={'input_type': 'password'},  # This hides it in browsable API
+        write_only=True
+    )
+
+    
 class UserProfileSerializer(serializers.ModelSerializer):
     """Serializer for user profile."""
     

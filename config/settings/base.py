@@ -31,6 +31,7 @@ DJANGO_APPS = [
 THIRD_PARTY_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_celery_beat',
     'django_celery_results',
@@ -117,6 +118,7 @@ else:
 
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.User'
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
@@ -244,7 +246,7 @@ SSLCOMMERZ_IS_LIVE = os.environ.get('SSLCOMMERZ_IS_LIVE', 'False') == 'True'
 # Frontend URL for invoice links
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 
-# Google OAuth Configuration
+
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
 

@@ -7,9 +7,27 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
-from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParameter
+from drf_spectacular.utils import (
+    extend_schema, 
+    OpenApiResponse, 
+    OpenApiRequest, 
+    OpenApiExample
+)
 from .models import User
-from .serializers import UserRegistrationSerializer, UserProfileSerializer
+from .serializers import (
+    UserRegistrationSerializer, 
+    UserProfileSerializer, 
+    LoginSerializer,
+    LogoutSerializer
+)
+from .services.google_auth import (
+    verify_google_id_token,
+    get_or_create_google_user,
+    generate_jwt_for_user
+)
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 @extend_schema(
@@ -37,273 +55,244 @@ class RegisterView(APIView):
         return Response({
             'user': UserProfileSerializer(user).data,
             'tokens': {
-                'refresh': str(refresh),
                 'access': str(refresh.access_token),
+                'refresh': str(refresh),
             }
         }, status=status.HTTP_201_CREATED)
 
 
 @extend_schema(
-    tags=['Authentication'],
-    summary='User login',
-    description='Authenticate user with email and password. Returns JWT tokens.',
-    request={
-        'type': 'object',
-        'properties': {
-            'email': {'type': 'string', 'format': 'email'},
-            'password': {'type': 'string', 'format': 'password'},
-        },
-        'required': ['email', 'password']
-    },
+    tags=["Authentication"],
+    summary="User Login",
+    description="Authenticate user using email and password. Returns JWT tokens.",
+    request=LoginSerializer,  # ← Use the serializer here
     responses={
-        200: OpenApiResponse(description='Login successful, returns user data and JWT tokens'),
-        400: OpenApiResponse(description='Email and password are required'),
-        401: OpenApiResponse(description='Invalid credentials'),
-        403: OpenApiResponse(description='User account is disabled'),
-    }
+        200: OpenApiResponse(description="Login successful"),
+        400: OpenApiResponse(description="Missing email or password"),
+        401: OpenApiResponse(description="Invalid credentials"),
+        403: OpenApiResponse(description="User account disabled"),
+    },
 )
 class LoginView(APIView):
-    """User login endpoint with email and password."""
     permission_classes = [AllowAny]
-    
+
     def post(self, request):
-        email = request.data.get('email')
-        password = request.data.get('password')
+        # You can also use the serializer for validation if you want
+        serializer = LoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         
-        if not email or not password:
+        email = serializer.validated_data.get("email")
+        password = serializer.validated_data.get("password")
+
+        user = User.objects.filter(email=email).first()
+
+        if not user or not user.check_password(password):
             return Response(
-                {'error': 'Email and password are required'},
-                status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Invalid credentials"},
+                status=status.HTTP_401_UNAUTHORIZED,
             )
-        
-        user = authenticate(request, username=email, password=password)
-        
-        if not user:
-            return Response(
-                {'error': 'Invalid credentials'},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-        
+
         if not user.is_active:
             return Response(
-                {'error': 'User account is disabled'},
-                status=status.HTTP_403_FORBIDDEN
+                {"detail": "User account is disabled"},
+                status=status.HTTP_403_FORBIDDEN,
             )
-        
-        # Generate JWT tokens
+
         refresh = RefreshToken.for_user(user)
-        
-        return Response({
-            'user': UserProfileSerializer(user).data,
-            'tokens': {
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-            }
-        })
+
+        return Response(
+            {
+                "user": UserProfileSerializer(user).data,
+                "tokens": {
+                    "access": str(refresh.access_token),
+                    "refresh": str(refresh),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 @extend_schema(
-    tags=['Authentication'],
-    summary='Get Google OAuth URL',
-    description='Get Google OAuth authorization URL. User should be redirected to this URL to start OAuth flow.',
+    tags=["Authentication"],
+    summary="Google Login with ID Token",
+    description=(
+        "Authenticate user using Google ID token (JWT).\n\n"
+        "Frontend should use `@react-oauth/google` or Google Identity Services to get the `credential` "
+        "(ID token), then send it to this endpoint.\n\n"
+        "This endpoint verifies the token, creates or logs in the user, and returns JWT access + refresh tokens."
+    ),
+    request=OpenApiRequest(
+        request={
+            "type": "object",
+            "properties": {
+                "id_token": {
+                    "type": "string",
+                    "description": "Google ID token (JWT) obtained from Google Sign-In",
+                    "example": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjEyMzQ1Njc4OTAiLCJ0eXAiOiJKV1QifQ..."
+                }
+            },
+            "required": ["id_token"]
+        }
+    ),
     responses={
         200: OpenApiResponse(
-            description='Google OAuth authorization URL',
+            description="Successful authentication",
             response={
-                'type': 'object',
-                'properties': {
-                    'authorization_url': {'type': 'string', 'format': 'uri'},
-                }
-            }
-        ),
-        500: OpenApiResponse(description='Google OAuth not configured'),
-    }
-)
-class GoogleOAuthURLView(APIView):
-    """Get Google OAuth authorization URL."""
-    permission_classes = [AllowAny]
-    
-    def get(self, request):
-        """Return Google OAuth authorization URL."""
-        from django.conf import settings
-        from apps.accounts.services import GoogleOAuthService
-        
-        try:
-            # Construct backend callback URL
-            # This should be the backend URL, not frontend
-            scheme = request.scheme
-            host = request.get_host()
-            callback_url = f"{scheme}://{host}/api/auth/google/callback/"
-            
-            # Get frontend redirect URI from query params (where to redirect after auth)
-            frontend_redirect = request.query_params.get('redirect_uri', settings.FRONTEND_URL)
-            
-            authorization_url, state = GoogleOAuthService.get_authorization_url(callback_url)
-            
-            # Store frontend redirect in session or return it to be stored by frontend
-            return Response({
-                'authorization_url': authorization_url,
-                'state': state,
-                'frontend_redirect': frontend_redirect,
-            })
-        except ValueError as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-
-@extend_schema(
-    tags=['Authentication'],
-    summary='Google OAuth callback',
-    description='Handle Google OAuth callback. Creates user if new, logs in if existing. Returns JWT tokens.',
-    parameters=[
-        OpenApiParameter(
-            name='code',
-            type=str,
-            location=OpenApiParameter.QUERY,
-            description='Authorization code from Google',
-            required=True,
-        ),
-        OpenApiParameter(
-            name='state',
-            type=str,
-            location=OpenApiParameter.QUERY,
-            description='State parameter from OAuth flow',
-            required=False,
-        ),
-        OpenApiParameter(
-            name='redirect_uri',
-            type=str,
-            location=OpenApiParameter.QUERY,
-            description='Frontend URL to redirect to after authentication',
-            required=False,
-        ),
-        OpenApiParameter(
-            name='format',
-            type=str,
-            location=OpenApiParameter.QUERY,
-            description='Response format: "json" for JSON response, default is redirect',
-            required=False,
-        ),
-    ],
-    responses={
-        200: OpenApiResponse(description='Login/Signup successful, returns user data and JWT tokens'),
-        400: OpenApiResponse(description='Invalid authorization code'),
-        500: OpenApiResponse(description='OAuth verification failed'),
-    }
-)
-class GoogleOAuthCallbackView(APIView):
-    """Handle Google OAuth callback and authenticate user."""
-    permission_classes = [AllowAny]
-    
-    def get(self, request):
-        """Process Google OAuth callback and authenticate user."""
-        from django.conf import settings
-        from apps.accounts.services import GoogleOAuthService
-        
-        code = request.query_params.get('code')
-        if not code:
-            return Response(
-                {'error': 'Authorization code is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            # Construct backend callback URL (must match the one used in authorization)
-            scheme = request.scheme
-            host = request.get_host()
-            callback_url = f"{scheme}://{host}/api/auth/google/callback/"
-            
-            # Verify token and get user info
-            user_info = GoogleOAuthService.verify_token_and_get_user_info(code, callback_url)
-            
-            # Get or create user
-            user, created = User.objects.get_or_create(
-                google_id=user_info['google_id'],
-                defaults={
-                    'email': user_info['email'],
-                    'first_name': user_info['first_name'],
-                    'last_name': user_info['last_name'],
-                    'is_business_user': True,
-                }
-            )
-            
-            # Update user info if exists (in case name changed)
-            if not created:
-                user.email = user_info['email']
-                user.first_name = user_info['first_name']
-                user.last_name = user_info['last_name']
-                user.save()
-            
-            # Generate JWT tokens
-            refresh = RefreshToken.for_user(user)
-            
-            # Get frontend redirect URL from query params
-            frontend_redirect = request.query_params.get('redirect_uri', settings.FRONTEND_URL)
-            
-            # Option 1: Return JSON response (for API clients)
-            if request.query_params.get('format') == 'json':
-                return Response({
-                    'user': UserProfileSerializer(user).data,
-                    'tokens': {
-                        'refresh': str(refresh),
-                        'access': str(refresh.access_token),
+                "type": "object",
+                "properties": {
+                    "user": {
+                        "type": "object",
+                        # Use $ref if you have a component schema for UserProfile
+                        # "$ref": "#/components/schemas/UserProfile"
+                        # Or keep inline:
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "email": {"type": "string"},
+                            "first_name": {"type": "string", "nullable": True},
+                            "last_name": {"type": "string", "nullable": True},
+                            "is_business_user": {"type": "boolean"},
+                            "google_id": {"type": "string", "nullable": True},
+                            # Add more fields from your UserProfileSerializer as needed
+                        }
                     },
-                    'is_new_user': created,
-                })
-            
-            # Option 2: Redirect to frontend with tokens in URL (for web browsers)
-            # Frontend should extract tokens from URL and store them
-            from urllib.parse import urlencode
-            tokens = {
-                'access': str(refresh.access_token),
-                'refresh': str(refresh),
+                    "access": {
+                        "type": "string",
+                        "description": "JWT access token (short-lived)",
+                        "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    },
+                    "refresh": {
+                        "type": "string",
+                        "description": "JWT refresh token (long-lived)",
+                        "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    }
+                },
+                "required": ["user", "access", "refresh"]
+            },
+            examples=[
+                OpenApiExample(
+                    "Success Response",
+                    value={
+                        "user": {
+                            "id": 42,
+                            "email": "user@example.com",
+                            "first_name": "Shaidur",
+                            "last_name": "",
+                            "is_business_user": True,
+                            "google_id": "123456789012345678901"
+                        },
+                        "access": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                        "refresh": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    },
+                    summary="Example of successful Google login",
+                    description="User was found/created and JWT tokens issued.",
+                    status_codes=['200'],  # ← FIXED HERE (string or int, list/tuple allowed)
+                    response_only=True,     # optional but good practice
+                )
+            ]
+        ),
+        400: OpenApiResponse(
+            description="Invalid or missing ID token",
+            response={
+                "type": "object",
+                "properties": {
+                    "detail": {"type": "string"}
+                },
+                "examples": [  # you can also use OpenApiExample here if you want named examples
+                    {"detail": "id_token is required"},
+                    {"detail": "Invalid Google ID token: Token expired"},
+                    {"detail": "Invalid Google ID token: Wrong audience"},
+                ]
             }
-            redirect_url = f"{frontend_redirect}?{urlencode(tokens)}"
+        ),
+        500: OpenApiResponse(
+            description="Server error during authentication",
+            response={"type": "object", "properties": {"detail": {"type": "string"}}}
+        )
+    }
+)
+class GoogleLoginAPIView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        id_token_str = request.data.get('id_token')
+
+        if not id_token_str:
+            return Response({"detail": "id_token is required"}, status=400)
+
+        try:
+            logger.info(f"Received ID token (first 50 chars): {id_token_str[:50]}...")
             
-            from django.shortcuts import redirect
-            return redirect(redirect_url)
-        except ValueError as e:
+            idinfo = verify_google_id_token(id_token_str)
+            logger.info(f"Verified claims: {idinfo.keys()}")
+            
+            user, created = get_or_create_google_user(idinfo)
+            tokens = generate_jwt_for_user(user)
+
+            return Response({
+                "user": UserProfileSerializer(user).data,
+                "tokens": { 
+                    "access": tokens['access'],
+                    "refresh": tokens['refresh'],
+                },
+            })
+
+        except ValueError as ve:
+            logger.error(f"Google token verification failed: {str(ve)}", exc_info=True)
             return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
+                {"detail": f"Invalid Google token: {str(ve)}"},
+                status=400
             )
         except Exception as e:
+            logger.exception("Unexpected error in Google login")
             return Response(
-                {'error': f'OAuth verification failed: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"detail": f"Server error: {str(e)}"},
+                status=500
             )
-
+        
 
 @extend_schema(
-    tags=['Authentication'],
-    summary='User logout',
-    description='Logout user and blacklist refresh token.',
-    request={
-        'type': 'object',
-        'properties': {
-            'refresh_token': {'type': 'string'},
-        }
-    },
+    tags=["Authentication"],
+    summary="User Logout",
+    description="Logout user by blacklisting refresh token.",
+    request=LogoutSerializer,  # ← Use the serializer here
     responses={
-        200: OpenApiResponse(description='Successfully logged out'),
-        400: OpenApiResponse(description='Invalid refresh token'),
-    }
+        200: OpenApiResponse(
+            description="Logout successful",
+            response={"type": "object", "properties": {"detail": {"type": "string"}}}
+        ),
+        400: OpenApiResponse(
+            description="Invalid refresh token or token not provided",
+            response={"type": "object", "properties": {"detail": {"type": "string"}}}
+        ),
+    },
 )
 class LogoutView(APIView):
-    """User logout endpoint."""
     permission_classes = [IsAuthenticated]
-    
+
     def post(self, request):
+        # Use serializer for validation
+        serializer = LogoutSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        refresh_token = serializer.validated_data.get("refresh_token")
+
         try:
-            refresh_token = request.data.get('refresh_token')
-            if refresh_token:
-                token = RefreshToken(refresh_token)
-                token.blacklist()
-            return Response({'message': 'Successfully logged out'}, status=status.HTTP_200_OK)
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+
+            return Response(
+                {"detail": "Successfully logged out"},
+                status=status.HTTP_200_OK,
+            )
+
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            # You might want to log the actual error
+            # logger.error(f"Logout error: {str(e)}")
+            return Response(
+                {"detail": "Invalid refresh token"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
 
 
 @extend_schema(
