@@ -1,6 +1,4 @@
-"""
-Authentication views for user registration, login, and profile management.
-"""
+
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -185,8 +183,8 @@ class LoginView(APIView):
                     },
                     summary="Example of successful Google login",
                     description="User was found/created and JWT tokens issued.",
-                    status_codes=['200'],  # ← FIXED HERE (string or int, list/tuple allowed)
-                    response_only=True,     # optional but good practice
+                    status_codes=['200'],  
+                    response_only=True, 
                 )
             ]
         ),
@@ -197,7 +195,7 @@ class LoginView(APIView):
                 "properties": {
                     "detail": {"type": "string"}
                 },
-                "examples": [  # you can also use OpenApiExample here if you want named examples
+                "examples": [  
                     {"detail": "id_token is required"},
                     {"detail": "Invalid Google ID token: Token expired"},
                     {"detail": "Invalid Google ID token: Wrong audience"},
@@ -254,7 +252,7 @@ class GoogleLoginAPIView(APIView):
     tags=["Authentication"],
     summary="User Logout",
     description="Logout user by blacklisting refresh token.",
-    request=LogoutSerializer,  # ← Use the serializer here
+    request=LogoutSerializer,
     responses={
         200: OpenApiResponse(
             description="Logout successful",
