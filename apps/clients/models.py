@@ -1,6 +1,4 @@
-"""
-Client model for storing customer information.
-"""
+
 from django.db import models
 from django.conf import settings
 

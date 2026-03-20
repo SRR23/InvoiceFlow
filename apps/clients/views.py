@@ -1,6 +1,4 @@
-"""
-Views for Client management.
-"""
+
 from rest_framework import viewsets, filters
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend

@@ -1,6 +1,4 @@
-"""
-Serializers for Client model.
-"""
+
 from rest_framework import serializers
 from .models import Client
 
