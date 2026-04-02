@@ -1,6 +1,4 @@
-"""
-Serializers for Invoice and InvoiceItem models.
-"""
+
 from rest_framework import serializers
 from .models import Invoice, InvoiceItem
 
