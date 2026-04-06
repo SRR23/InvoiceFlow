@@ -1,15 +1,27 @@
+import logging
 
-from rest_framework import viewsets, status
-from rest_framework.views import APIView
+import stripe
+from django.conf import settings
+from django.utils import timezone
+from drf_spectacular.utils import OpenApiResponse, extend_schema
+from rest_framework import status, viewsets
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.views import APIView
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from drf_spectacular.utils import extend_schema, OpenApiResponse
+
 from utils.permissions import IsBusinessUser
 from .models import Payment, WebhookEvent
 from .serializers import PaymentSerializer, WebhookEventSerializer
-from .services import StripeService, SSLCommerzService
+from .services import (
+    PaymentGatewayMixin,
+    SSLCommerzService,
+    StripeService,
+    stripe_event_to_dict,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class PaymentViewSet(viewsets.ReadOnlyModelViewSet):
@@ -19,7 +31,7 @@ class PaymentViewSet(viewsets.ReadOnlyModelViewSet):
     """
     serializer_class = PaymentSerializer
     permission_classes = [IsAuthenticated, IsBusinessUser]
-    
+
     def get_queryset(self):
         """Return only payments for invoices belonging to the current user."""
         return Payment.objects.filter(invoice__user=self.request.user).select_related('invoice')
@@ -54,29 +66,29 @@ class PaymentViewSet(viewsets.ReadOnlyModelViewSet):
 class CreateStripePaymentView(APIView):
     """Create a Stripe checkout session for an invoice."""
     permission_classes = [IsAuthenticated, IsBusinessUser]
-    
+
     def post(self, request):
         invoice_id = request.data.get('invoice_id')
-        
+
         if not invoice_id:
             return Response(
                 {'error': 'invoice_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         try:
             from apps.invoices.models import Invoice
             invoice = Invoice.objects.get(id=invoice_id, user=request.user)
-            
+
             if invoice.status == 'PAID':
                 return Response(
                     {'error': 'Invoice is already paid'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
+
             # Create Stripe checkout session
             checkout_url = StripeService.create_checkout_session(invoice)
-            
+
             return Response({
                 'checkout_url': checkout_url,
                 'invoice_id': invoice.id
@@ -117,35 +129,45 @@ class CreateStripePaymentView(APIView):
 class CreateSSLCommerzPaymentView(APIView):
     """Create an SSLCommerz payment session for an invoice."""
     permission_classes = [IsAuthenticated, IsBusinessUser]
-    
+
     def post(self, request):
         invoice_id = request.data.get('invoice_id')
-        
+
         if not invoice_id:
             return Response(
                 {'error': 'invoice_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         try:
             from apps.invoices.models import Invoice
             invoice = Invoice.objects.get(id=invoice_id, user=request.user)
-            
+
             if invoice.status == 'PAID':
                 return Response(
                     {'error': 'Invoice is already paid'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
+
             # Create SSLCommerz payment session
             payment_data = SSLCommerzService.create_payment_session(invoice)
-            
+
             return Response(payment_data)
         except Invoice.DoesNotExist:
             return Response(
                 {'error': 'Invoice not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+
+def _flatten_drf_request_data(request):
+    """Normalize DRF parsed body to a plain dict for JSONField storage."""
+    data = request.data
+    if hasattr(data, 'dict'):
+        return data.dict()
+    if isinstance(data, dict):
+        return dict(data)
+    return {}
 
 
 @extend_schema(
@@ -164,24 +186,60 @@ class CreateSSLCommerzPaymentView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class StripeWebhookView(APIView):
     """Handle Stripe webhook events."""
+    authentication_classes = []
     permission_classes = [AllowAny]
-    
+
     def post(self, request):
-        """Process Stripe webhook."""
-        # TODO: Implement Stripe webhook verification and processing
+        """Verify signature, persist event, update invoice/payment state."""
         payload = request.body
         sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
-        
-        # Log webhook event
-        event = WebhookEvent.objects.create(
+
+        if not settings.STRIPE_WEBHOOK_SECRET:
+            logger.error('STRIPE_WEBHOOK_SECRET is not configured')
+            return Response(
+                {'error': 'Webhook endpoint not configured'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if not sig_header:
+            return Response({'error': 'Missing Stripe-Signature header'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+            )
+        except ValueError as exc:
+            logger.warning('Invalid Stripe webhook payload: %s', exc)
+            return Response({'error': 'Invalid payload'}, status=status.HTTP_400_BAD_REQUEST)
+        except stripe.error.SignatureVerificationError as exc:
+            logger.warning('Invalid Stripe webhook signature: %s', exc)
+            return Response({'error': 'Invalid signature'}, status=status.HTTP_400_BAD_REQUEST)
+
+        event_dict = stripe_event_to_dict(event)
+        event_id = event_dict.get('id')
+        event_type = event_dict.get('type', 'unknown')
+
+        if event_id and PaymentGatewayMixin.webhook_event_already_processed_stripe(event_id, None):
+            return Response({'received': True, 'duplicate': True})
+
+        webhook_event = WebhookEvent.objects.create(
             gateway='stripe',
-            event_type=request.data.get('type', 'unknown'),
-            payload=request.data
+            event_type=event_type,
+            payload=event_dict,
         )
-        
-        # TODO: Process webhook event
-        # StripeService.process_webhook(event)
-        
+
+        try:
+            StripeService.process_webhook(webhook_event)
+        except Exception as exc:
+            logger.exception('Stripe webhook processing failed')
+            webhook_event.error_message = str(exc)[:2000]
+            webhook_event.save(update_fields=['error_message'])
+            return Response({'error': 'Processing failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        webhook_event.processed = True
+        webhook_event.processed_at = timezone.now()
+        webhook_event.save(update_fields=['processed', 'processed_at'])
+
         return Response({'received': True})
 
 
@@ -201,18 +259,38 @@ class StripeWebhookView(APIView):
 @method_decorator(csrf_exempt, name='dispatch')
 class SSLCommerzWebhookView(APIView):
     """Handle SSLCommerz IPN (Instant Payment Notification)."""
+    authentication_classes = []
     permission_classes = [AllowAny]
-    
+
     def post(self, request):
-        """Process SSLCommerz IPN."""
-        # TODO: Implement SSLCommerz IPN verification and processing
-        event = WebhookEvent.objects.create(
+        """Accept IPN, validate with SSLCommerz, update invoice/payment state."""
+        if not settings.SSLCOMMERZ_STORE_ID or not settings.SSLCOMMERZ_STORE_PASSWORD:
+            logger.error('SSLCommerz store credentials are not configured')
+            return Response(
+                {'error': 'Webhook endpoint not configured'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        payload_dict = _flatten_drf_request_data(request)
+
+        webhook_event = WebhookEvent.objects.create(
             gateway='sslcommerz',
             event_type='payment_notification',
-            payload=request.data
+            payload=payload_dict,
         )
-        
-        # TODO: Process webhook event
-        # SSLCommerzService.process_ipn(event)
-        
+
+        try:
+            SSLCommerzService.process_ipn(webhook_event)
+        except Exception as exc:
+            logger.exception('SSLCommerz IPN processing failed')
+            webhook_event.error_message = str(exc)[:2000]
+            webhook_event.save(update_fields=['error_message'])
+            # Return 200 so SSLCommerz does not retry indefinitely on bad data;
+            # investigate via WebhookEvent.error_message.
+            return Response({'status': 'failed', 'detail': str(exc)[:500]})
+
+        webhook_event.processed = True
+        webhook_event.processed_at = timezone.now()
+        webhook_event.save(update_fields=['processed', 'processed_at'])
+
         return Response({'status': 'success'})
