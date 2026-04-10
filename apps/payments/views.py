@@ -13,7 +13,13 @@ from django.utils.decorators import method_decorator
 
 from utils.permissions import IsBusinessUser
 from .models import Payment, WebhookEvent
-from .serializers import PaymentSerializer, WebhookEventSerializer
+from .serializers import (
+    CreateGatewayPaymentRequestSerializer,
+    PaymentErrorResponseSerializer,
+    PaymentSerializer,
+    SSLCommerzSessionResponseSerializer,
+    StripeCheckoutResponseSerializer,
+)
 from .services import (
     PaymentGatewayMixin,
     SSLCommerzService,
@@ -40,28 +46,28 @@ class PaymentViewSet(viewsets.ReadOnlyModelViewSet):
 @extend_schema(
     tags=['Payments'],
     summary='Create Stripe payment',
-    description='Create a Stripe checkout session for an invoice.',
-    request={
-        'type': 'object',
-        'properties': {
-            'invoice_id': {'type': 'integer'},
-        },
-        'required': ['invoice_id']
-    },
+    description=(
+        "**Authentication:** JWT (`Authorization: Bearer <access_token>`). Business user only.\n\n"
+        "**Flow:** Sends `invoice_id` in the JSON body. The server loads that invoice (must be yours), "
+        "ensures it is not already `PAID`, then creates a **Stripe Checkout Session** with the invoice "
+        "total and metadata (`invoice_id`, `invoice_number`).\n\n"
+        "**Response:** `checkout_url` is the Stripe-hosted payment page—redirect the customer’s browser "
+        "there (or open in a new tab). After payment, Stripe sends a webhook to your backend to mark the "
+        "invoice paid; the frontend success URL is only for UX.\n\n"
+        "**Request body:** `application/json` with `invoice_id` (integer)."
+    ),
+    request=CreateGatewayPaymentRequestSerializer,
     responses={
-        200: OpenApiResponse(
-            description='Checkout session created',
-            response={
-                'type': 'object',
-                'properties': {
-                    'checkout_url': {'type': 'string', 'format': 'uri'},
-                    'invoice_id': {'type': 'integer'},
-                }
-            }
+        200: StripeCheckoutResponseSerializer,
+        400: OpenApiResponse(
+            response=PaymentErrorResponseSerializer,
+            description='Missing invoice_id, invoice already paid, or invalid input',
         ),
-        400: OpenApiResponse(description='Invalid request or invoice already paid'),
-        404: OpenApiResponse(description='Invoice not found'),
-    }
+        404: OpenApiResponse(
+            response=PaymentErrorResponseSerializer,
+            description='Invoice not found or not owned by the current user',
+        ),
+    },
 )
 class CreateStripePaymentView(APIView):
     """Create a Stripe checkout session for an invoice."""
@@ -103,28 +109,34 @@ class CreateStripePaymentView(APIView):
 @extend_schema(
     tags=['Payments'],
     summary='Create SSLCommerz payment',
-    description='Create an SSLCommerz payment session for an invoice.',
-    request={
-        'type': 'object',
-        'properties': {
-            'invoice_id': {'type': 'integer'},
-        },
-        'required': ['invoice_id']
-    },
+    description=(
+        "**Authentication:** JWT (`Authorization: Bearer <access_token>`). Business user only.\n\n"
+        "**Flow:** Sends `invoice_id` in the JSON body. The server loads that invoice (must be yours), "
+        "ensures it is not already `PAID`, then calls **SSLCommerz** `gwprocess/v4/api.php` to create a "
+        "hosted session. The gateway returns `GatewayPageURL`, which is exposed as `redirect_url`.\n\n"
+        "**Response:** `redirect_url` is where the customer completes payment (bank/mobile wallet, etc.). "
+        "`tran_id` is your reference (format `INV-<id>-<suffix>`) and matches the IPN. Optional "
+        "`session_key` is returned when the gateway provides it.\n\n"
+        "**After payment:** SSLCommerz POSTs to your **IPN webhook** (`/api/payments/webhooks/sslcommerz/`); "
+        "the backend validates `val_id` and marks the invoice paid.\n\n"
+        "**Request body:** `application/json` with `invoice_id` (integer)."
+    ),
+    request=CreateGatewayPaymentRequestSerializer,
     responses={
-        200: OpenApiResponse(
-            description='Payment session created',
-            response={
-                'type': 'object',
-                'properties': {
-                    'redirect_url': {'type': 'string', 'format': 'uri'},
-                    'payment_data': {'type': 'object'},
-                }
-            }
+        200: SSLCommerzSessionResponseSerializer,
+        400: OpenApiResponse(
+            response=PaymentErrorResponseSerializer,
+            description='Missing invoice_id, invoice already paid, or invalid input',
         ),
-        400: OpenApiResponse(description='Invalid request or invoice already paid'),
-        404: OpenApiResponse(description='Invoice not found'),
-    }
+        404: OpenApiResponse(
+            response=PaymentErrorResponseSerializer,
+            description='Invoice not found or not owned by the current user',
+        ),
+        502: OpenApiResponse(
+            response=PaymentErrorResponseSerializer,
+            description='SSLCommerz rejected the session or returned an invalid/non-JSON response',
+        ),
+    },
 )
 class CreateSSLCommerzPaymentView(APIView):
     """Create an SSLCommerz payment session for an invoice."""
@@ -150,9 +162,15 @@ class CreateSSLCommerzPaymentView(APIView):
                 )
 
             # Create SSLCommerz payment session
-            payment_data = SSLCommerzService.create_payment_session(invoice)
+            session_payload = SSLCommerzService.create_payment_session(invoice)
 
-            return Response(payment_data)
+            return Response(session_payload)
+        except ValueError as exc:
+            # SSLCommerz returned an error or malformed response
+            return Response(
+                {'error': str(exc)},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         except Invoice.DoesNotExist:
             return Response(
                 {'error': 'Invoice not found'},

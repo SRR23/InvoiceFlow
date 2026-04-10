@@ -257,29 +257,50 @@ class SSLCommerzService:
         return "https://sandbox.sslcommerz.com"
 
     @staticmethod
+    def _parse_hosted_session_json(response):
+        """
+        Parse JSON from ``gwprocess/v4/api.php``.
+
+        Success payloads typically include ``status`` (SUCCESS), ``GatewayPageURL``,
+        and ``sessionkey``. Failures set ``status`` to FAILED and ``failedreason``.
+        """
+        try:
+            data = response.json()
+        except ValueError as exc:
+            snippet = (response.text or "")[:500]
+            raise ValueError(
+                f"SSLCommerz returned non-JSON body (HTTP {response.status_code}): {snippet!r}"
+            ) from exc
+
+        if isinstance(data, list) and data:
+            data = data[0]
+        if not isinstance(data, dict):
+            raise ValueError("SSLCommerz session response has unexpected shape")
+
+        return data
+
+    @staticmethod
     def create_payment_session(invoice):
         """
-        Create an SSLCommerz payment session for an invoice.
-        Returns payment data including redirect URL.
+        Create an SSLCommerz hosted payment session for an invoice.
+
+        Returns a dict safe to send to the frontend: ``redirect_url`` (GatewayPageURL),
+        ``tran_id``, and optional ``session_key``. Store credentials are never included.
         """
 
         store_id = settings.SSLCOMMERZ_STORE_ID
         store_password = settings.SSLCOMMERZ_STORE_PASSWORD
-        is_live = settings.SSLCOMMERZ_IS_LIVE
+        api_url = SSLCommerzService._api_base()
 
-        # Determine API URL based on live/sandbox mode
-        if is_live:
-            api_url = "https://securepay.sslcommerz.com"
-        else:
-            api_url = "https://sandbox.sslcommerz.com"
+        tran_id = f"INV-{invoice.id}-{invoice.public_id.hex[:8]}"
 
-        # Prepare payment data
+        # Request body for SSLCommerz Hosted Payment / session API (v4).
         payment_data = {
             "store_id": store_id,
             "store_passwd": store_password,
             "total_amount": str(invoice.total_amount),
             "currency": invoice.currency,
-            "tran_id": f"INV-{invoice.id}-{invoice.public_id.hex[:8]}",
+            "tran_id": tran_id,
             "success_url": f"{settings.FRONTEND_URL}/payment/success",
             "fail_url": f"{settings.FRONTEND_URL}/payment/fail",
             "cancel_url": f"{settings.FRONTEND_URL}/payment/cancel",
@@ -299,15 +320,47 @@ class SSLCommerzService:
                 timeout=60,
             )
 
-            if response.status_code == 200:
-                # Parse response
-                # SSLCommerz returns form data or JSON
-                return {
-                    "redirect_url": response.url if hasattr(response, "url") else None,
-                    "payment_data": payment_data,
-                }
-            else:
-                raise Exception(f"SSLCommerz API error: {response.status_code}")
+            body = SSLCommerzService._parse_hosted_session_json(response)
+
+            if response.status_code != 200:
+                reason = (
+                    body.get("failedreason")
+                    or body.get("message")
+                    or (response.text or "")[:300]
+                )
+                raise ValueError(f"SSLCommerz HTTP {response.status_code}: {reason}")
+
+            status_raw = (body.get("status") or "").strip().upper()
+            # Documented success is status=SUCCESS; some responses omit status but include GatewayPageURL.
+            if status_raw == "FAILED":
+                reason = (
+                    body.get("failedreason")
+                    or body.get("failed_reason")
+                    or body.get("error")
+                    or body.get("message")
+                    or "session initiation failed"
+                )
+                raise ValueError(f"SSLCommerz session failed: {reason}")
+
+            gateway_url = (body.get("GatewayPageURL") or body.get("gateway_page_url") or "").strip()
+            if not gateway_url:
+                reason = (
+                    body.get("failedreason")
+                    or body.get("failed_reason")
+                    or "missing GatewayPageURL"
+                )
+                raise ValueError(f"SSLCommerz session failed ({status_raw or 'UNKNOWN'}): {reason}")
+
+            session_key = body.get("sessionkey") or body.get("session_key")
+
+            return {
+                "redirect_url": gateway_url,
+                "tran_id": tran_id,
+                "session_key": session_key,
+                "invoice_id": invoice.id,
+            }
+        except ValueError:
+            raise
         except Exception as e:
             raise Exception(f"SSLCommerz payment session creation failed: {str(e)}") from e
 
