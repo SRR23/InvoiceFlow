@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import Payment, WebhookEvent
+
+from .models import MerchantGatewaySettings, Payment, WebhookEvent
 
 
 @admin.register(Payment)
@@ -8,6 +9,20 @@ class PaymentAdmin(admin.ModelAdmin):
     list_filter = ('gateway', 'status', 'created_at')
     search_fields = ('transaction_id', 'invoice__invoice_number', 'invoice__client__name')
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(MerchantGatewaySettings)
+class MerchantGatewaySettingsAdmin(admin.ModelAdmin):
+    list_display = (
+        'user',
+        'webhook_public_id',
+        'stripe_enabled',
+        'sslcommerz_enabled',
+        'sslcommerz_is_live',
+        'updated_at',
+    )
+    search_fields = ('user__email', 'sslcommerz_store_id')
+    readonly_fields = ('webhook_public_id', 'created_at', 'updated_at')
 
 
 @admin.register(WebhookEvent)

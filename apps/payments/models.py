@@ -1,10 +1,15 @@
 """
 Payment and WebhookEvent models.
 """
-from django.db import models
+import uuid
+
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.validators import MinValueValidator
-from decimal import Decimal
+from django.db import models
+
+from utils.encryption import decrypt_secret, encrypt_secret
 
 
 class Payment(models.Model):
@@ -125,3 +130,72 @@ class WebhookEvent(models.Model):
     
     def __str__(self):
         return f"{self.gateway} - {self.event_type} - {self.created_at}"
+
+
+class MerchantGatewaySettings(models.Model):
+    """
+    Per-merchant payment gateway credentials for SaaS: each business stores their own
+    Stripe / SSLCommerz keys. Secrets are encrypted at rest.
+
+    Webhook URLs include ``webhook_public_id`` so the platform can verify signatures
+    with the correct merchant's webhook signing secret.
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="merchant_gateway_settings",
+    )
+    webhook_public_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+        help_text="Opaque id used in webhook URL paths for this merchant",
+    )
+
+    stripe_enabled = models.BooleanField(default=False)
+    stripe_publishable_key = models.CharField(max_length=255, blank=True)
+    stripe_secret_key_encrypted = models.TextField(blank=True)
+    stripe_webhook_secret_encrypted = models.TextField(blank=True)
+
+    sslcommerz_enabled = models.BooleanField(default=False)
+    sslcommerz_store_id = models.CharField(max_length=255, blank=True)
+    sslcommerz_store_password_encrypted = models.TextField(blank=True)
+    sslcommerz_is_live = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "merchant_gateway_settings"
+        verbose_name = "Merchant gateway settings"
+        verbose_name_plural = "Merchant gateway settings"
+
+    def __str__(self):
+        return f"Gateway settings for {self.user.email}"
+
+    def set_stripe_secret_key(self, plain: str) -> None:
+        self.stripe_secret_key_encrypted = encrypt_secret(plain) if plain else ""
+
+    def get_stripe_secret_key(self) -> str:
+        return decrypt_secret(self.stripe_secret_key_encrypted) if self.stripe_secret_key_encrypted else ""
+
+    def set_stripe_webhook_secret(self, plain: str) -> None:
+        self.stripe_webhook_secret_encrypted = encrypt_secret(plain) if plain else ""
+
+    def get_stripe_webhook_secret(self) -> str:
+        return (
+            decrypt_secret(self.stripe_webhook_secret_encrypted)
+            if self.stripe_webhook_secret_encrypted
+            else ""
+        )
+
+    def set_sslcommerz_store_password(self, plain: str) -> None:
+        self.sslcommerz_store_password_encrypted = encrypt_secret(plain) if plain else ""
+
+    def get_sslcommerz_store_password(self) -> str:
+        return (
+            decrypt_secret(self.sslcommerz_store_password_encrypted)
+            if self.sslcommerz_store_password_encrypted
+            else ""
+        )

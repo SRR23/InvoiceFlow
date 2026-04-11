@@ -11,6 +11,10 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.invoices.models import Invoice
+from apps.payments.credential_resolution import (
+    resolve_sslcommerz_credentials,
+    resolve_stripe_secret_key,
+)
 from apps.payments.models import Payment
 from utils.constants import (
     INVOICE_STATUS_PAID,
@@ -125,10 +129,17 @@ class StripeService:
     def create_checkout_session(invoice):
         """
         Create a Stripe checkout session for an invoice.
+        Uses the invoice owner's Stripe secret key (merchant settings or platform default).
         Returns the checkout URL.
         """
+        secret_key = resolve_stripe_secret_key(invoice.user)
+        if not secret_key:
+            raise ValueError(
+                "Stripe secret key is not configured for this account. "
+                "Add it under Payment gateway settings (or set platform STRIPE_SECRET_KEY for dev)."
+            )
 
-        stripe.api_key = settings.STRIPE_SECRET_KEY
+        stripe.api_key = secret_key
 
         try:
             checkout_session = stripe.checkout.Session.create(
@@ -151,6 +162,7 @@ class StripeService:
                 metadata={
                     "invoice_id": str(invoice.id),
                     "invoice_number": invoice.invoice_number,
+                    "user_id": str(invoice.user_id),
                 },
             )
 
@@ -160,7 +172,7 @@ class StripeService:
             raise Exception(f"Stripe checkout session creation failed: {str(e)}") from e
 
     @staticmethod
-    def process_webhook(webhook_event):
+    def process_webhook(webhook_event, merchant_user_id=None):
         """
         Process a Stripe webhook event stored on ``WebhookEvent`` (payload = full Stripe event dict).
         Updates invoice and payment status for successful Checkout sessions.
@@ -182,14 +194,14 @@ class StripeService:
 
         if event_type in StripeService._CHECKOUT_SUCCESS_TYPES:
             session = payload.get("data", {}).get("object") or {}
-            StripeService._handle_checkout_session_success(session)
+            StripeService._handle_checkout_session_success(session, merchant_user_id=merchant_user_id)
             return
 
         # Other event types are acknowledged without action (subscription, etc.).
         logger.debug("Stripe webhook type %s ignored (no handler)", event_type)
 
     @staticmethod
-    def _handle_checkout_session_success(session):
+    def _handle_checkout_session_success(session, merchant_user_id=None):
         """Apply a paid Checkout Session to the invoice referenced in metadata."""
         metadata = session.get("metadata") or {}
         invoice_id_raw = metadata.get("invoice_id")
@@ -200,6 +212,15 @@ class StripeService:
             invoice_id = int(invoice_id_raw)
         except (TypeError, ValueError) as exc:
             raise ValueError("Invalid metadata.invoice_id") from exc
+
+        meta_user_raw = metadata.get("user_id")
+        if merchant_user_id is not None and meta_user_raw:
+            try:
+                meta_user_id = int(meta_user_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Invalid metadata.user_id") from exc
+            if meta_user_id != merchant_user_id:
+                raise ValueError("metadata.user_id does not match webhook merchant")
 
         payment_status = (session.get("payment_status") or "").lower()
         if payment_status != "paid":
@@ -220,6 +241,9 @@ class StripeService:
         invoice = Invoice.objects.filter(pk=invoice_id).first()
         if not invoice:
             raise ValueError(f"Invoice id={invoice_id} not found")
+
+        if merchant_user_id is not None and invoice.user_id != merchant_user_id:
+            raise ValueError("Invoice does not belong to the webhook merchant account")
 
         if invoice.currency.upper() != currency:
             raise ValueError(
@@ -251,8 +275,8 @@ class SSLCommerzService:
     """Service for handling SSLCommerz payments."""
 
     @staticmethod
-    def _api_base():
-        if settings.SSLCOMMERZ_IS_LIVE:
+    def _api_base(is_live: bool) -> str:
+        if is_live:
             return "https://securepay.sslcommerz.com"
         return "https://sandbox.sslcommerz.com"
 
@@ -288,9 +312,13 @@ class SSLCommerzService:
         ``tran_id``, and optional ``session_key``. Store credentials are never included.
         """
 
-        store_id = settings.SSLCOMMERZ_STORE_ID
-        store_password = settings.SSLCOMMERZ_STORE_PASSWORD
-        api_url = SSLCommerzService._api_base()
+        store_id, store_password, is_live = resolve_sslcommerz_credentials(invoice.user)
+        if not store_id or not store_password:
+            raise ValueError(
+                "SSLCommerz store credentials are not configured for this account. "
+                "Add them under Payment gateway settings (or set platform SSLCOMMERZ_* for dev)."
+            )
+        api_url = SSLCommerzService._api_base(is_live)
 
         tran_id = f"INV-{invoice.id}-{invoice.public_id.hex[:8]}"
 
@@ -365,19 +393,21 @@ class SSLCommerzService:
             raise Exception(f"SSLCommerz payment session creation failed: {str(e)}") from e
 
     @staticmethod
-    def validate_transaction(val_id):
+    def validate_transaction(val_id, store_id, store_passwd, is_live):
         """
         Call SSLCommerz validation API to confirm ``val_id`` after IPN.
         Returns the parsed validation payload (dict).
         """
         if not val_id:
             raise ValueError("val_id is required")
-        base = SSLCommerzService._api_base()
+        if not store_id or not store_passwd:
+            raise ValueError("SSLCommerz store credentials are required for validation")
+        base = SSLCommerzService._api_base(is_live)
         url = f"{base}/validator/api/validationserverAPI.php"
         params = {
             "val_id": val_id,
-            "store_id": settings.SSLCOMMERZ_STORE_ID,
-            "store_passwd": settings.SSLCOMMERZ_STORE_PASSWORD,
+            "store_id": store_id,
+            "store_passwd": store_passwd,
             "format": "json",
             "v": "1",
         }
@@ -411,20 +441,39 @@ class SSLCommerzService:
             return None
 
     @staticmethod
-    def process_ipn(webhook_event):
+    def process_ipn(
+        webhook_event,
+        *,
+        store_id=None,
+        store_passwd=None,
+        is_live=None,
+        merchant_user_id=None,
+    ):
         """
         Process an SSLCommerz IPN (Instant Payment Notification).
         Verifies ``val_id`` server-side, then updates invoice and payment status.
+
+        For merchant-specific webhooks, pass ``store_id``, ``store_passwd``, ``is_live``,
+        and ``merchant_user_id``. For legacy single-tenant IPN, omit these to use
+        platform settings from Django settings (``SSLCOMMERZ_*``).
         """
         payload = webhook_event.payload
         if not isinstance(payload, dict):
             raise ValueError("IPN payload must be a dict")
+
+        if store_id is None:
+            store_id = getattr(settings, "SSLCOMMERZ_STORE_ID", "") or ""
+            store_passwd = getattr(settings, "SSLCOMMERZ_STORE_PASSWORD", "") or ""
+            is_live = bool(getattr(settings, "SSLCOMMERZ_IS_LIVE", False))
 
         val_id = payload.get("val_id") or payload.get("valId")
         tran_id = payload.get("tran_id") or payload.get("tranId")
 
         if not val_id:
             raise ValueError("IPN missing val_id")
+
+        if not store_id or not store_passwd:
+            raise ValueError("SSLCommerz store credentials are not configured")
 
         # Idempotency: same val_id already completed.
         if Payment.objects.filter(
@@ -435,7 +484,7 @@ class SSLCommerzService:
             logger.info("SSLCommerz IPN duplicate for val_id=%s — skipping", val_id)
             return
 
-        validated = SSLCommerzService.validate_transaction(val_id)
+        validated = SSLCommerzService.validate_transaction(val_id, store_id, store_passwd, is_live)
 
         validated_tran = validated.get("tran_id") or tran_id
         if tran_id and validated_tran and str(validated_tran) != str(tran_id):
@@ -448,6 +497,9 @@ class SSLCommerzService:
         invoice = Invoice.objects.filter(pk=invoice_id).first()
         if not invoice:
             raise ValueError(f"Invoice id={invoice_id} not found")
+
+        if merchant_user_id is not None and invoice.user_id != merchant_user_id:
+            raise ValueError("Invoice does not belong to this merchant account")
 
         amount_raw = (
             validated.get("amount")

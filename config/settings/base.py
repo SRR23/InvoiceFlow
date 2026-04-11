@@ -197,7 +197,7 @@ SIMPLE_JWT = {
 
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
+    "http://localhost:5173",
     "http://localhost:8000",
 ]
 
@@ -235,6 +235,8 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@invoiceflow.com')
 
 # Payment Gateway Configuration
+# Optional platform defaults (e.g. dev/demo). Merchants normally use per-tenant
+# credentials via MerchantGatewaySettings; see /api/payments/gateway-settings/.
 STRIPE_PUBLIC_KEY = os.environ.get('STRIPE_PUBLIC_KEY', '')
 STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '')
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
@@ -242,6 +244,9 @@ STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
 SSLCOMMERZ_STORE_ID = os.environ.get('SSLCOMMERZ_STORE_ID', '')
 SSLCOMMERZ_STORE_PASSWORD = os.environ.get('SSLCOMMERZ_STORE_PASSWORD', '')
 SSLCOMMERZ_IS_LIVE = os.environ.get('SSLCOMMERZ_IS_LIVE', 'False') == 'True'
+
+# Fernet key for encrypting per-merchant gateway secrets (optional; falls back to SECRET_KEY derivation)
+PAYMENT_GATEWAY_FERNET_KEY = os.environ.get('PAYMENT_GATEWAY_FERNET_KEY', '')
 
 # Frontend URL for invoice links
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')

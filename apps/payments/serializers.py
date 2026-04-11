@@ -1,8 +1,10 @@
 """
 Serializers for Payment models.
 """
+from django.urls import reverse
 from rest_framework import serializers
-from .models import Payment, WebhookEvent
+
+from .models import MerchantGatewaySettings, Payment, WebhookEvent
 
 
 class CreateGatewayPaymentRequestSerializer(serializers.Serializer):
@@ -46,6 +48,119 @@ class PaymentErrorResponseSerializer(serializers.Serializer):
     """Standard error envelope for payment creation endpoints."""
 
     error = serializers.CharField(help_text="Human-readable error message.")
+
+
+class MerchantGatewaySettingsSerializer(serializers.ModelSerializer):
+    """
+    Read/update merchant-owned gateway credentials.
+
+    Secrets are write-only; responses expose booleans and webhook URLs instead of raw secrets.
+    """
+
+    stripe_secret_key = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        help_text="Stripe secret API key (sk_...). Omit on PATCH to leave unchanged; send empty string to clear.",
+    )
+    stripe_webhook_secret = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        help_text="Signing secret for the Stripe webhook endpoint (whsec_...).",
+    )
+    sslcommerz_store_password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        help_text="SSLCommerz store password. Omit on PATCH to leave unchanged.",
+    )
+
+    stripe_secret_configured = serializers.SerializerMethodField(read_only=True)
+    stripe_webhook_secret_configured = serializers.SerializerMethodField(read_only=True)
+    sslcommerz_store_password_configured = serializers.SerializerMethodField(read_only=True)
+    stripe_webhook_url = serializers.SerializerMethodField(read_only=True)
+    sslcommerz_ipn_url = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = MerchantGatewaySettings
+        fields = (
+            "webhook_public_id",
+            "stripe_enabled",
+            "stripe_publishable_key",
+            "stripe_secret_key",
+            "stripe_secret_configured",
+            "stripe_webhook_secret",
+            "stripe_webhook_secret_configured",
+            "stripe_webhook_url",
+            "sslcommerz_enabled",
+            "sslcommerz_store_id",
+            "sslcommerz_store_password",
+            "sslcommerz_store_password_configured",
+            "sslcommerz_is_live",
+            "sslcommerz_ipn_url",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "webhook_public_id",
+            "stripe_secret_configured",
+            "stripe_webhook_secret_configured",
+            "stripe_webhook_url",
+            "sslcommerz_store_password_configured",
+            "sslcommerz_ipn_url",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_stripe_secret_configured(self, obj):
+        return bool(obj.stripe_secret_key_encrypted)
+
+    def get_stripe_webhook_secret_configured(self, obj):
+        return bool(obj.stripe_webhook_secret_encrypted)
+
+    def get_sslcommerz_store_password_configured(self, obj):
+        return bool(obj.sslcommerz_store_password_encrypted)
+
+    def get_stripe_webhook_url(self, obj):
+        request = self.context.get("request")
+        if not request:
+            return ""
+        path = reverse("payments:stripe-webhook-merchant", kwargs={"webhook_key": obj.webhook_public_id})
+        return request.build_absolute_uri(path)
+
+    def get_sslcommerz_ipn_url(self, obj):
+        request = self.context.get("request")
+        if not request:
+            return ""
+        path = reverse("payments:sslcommerz-webhook-merchant", kwargs={"webhook_key": obj.webhook_public_id})
+        return request.build_absolute_uri(path)
+
+    def update(self, instance, validated_data):
+        stripe_secret = validated_data.pop("stripe_secret_key", None)
+        stripe_wh = validated_data.pop("stripe_webhook_secret", None)
+        ssl_pw = validated_data.pop("sslcommerz_store_password", None)
+
+        instance = super().update(instance, validated_data)
+
+        if stripe_secret is not None:
+            if stripe_secret == "":
+                instance.stripe_secret_key_encrypted = ""
+            else:
+                instance.set_stripe_secret_key(stripe_secret)
+        if stripe_wh is not None:
+            if stripe_wh == "":
+                instance.stripe_webhook_secret_encrypted = ""
+            else:
+                instance.set_stripe_webhook_secret(stripe_wh)
+        if ssl_pw is not None:
+            if ssl_pw == "":
+                instance.sslcommerz_store_password_encrypted = ""
+            else:
+                instance.set_sslcommerz_store_password(ssl_pw)
+
+        instance.save()
+        return instance
 
 
 class PaymentSerializer(serializers.ModelSerializer):

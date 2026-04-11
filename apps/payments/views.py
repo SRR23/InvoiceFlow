@@ -12,9 +12,11 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 
 from utils.permissions import IsBusinessUser
-from .models import Payment, WebhookEvent
+from apps.payments.credential_resolution import get_or_create_merchant_gateway_settings
+from .models import MerchantGatewaySettings, Payment, WebhookEvent
 from .serializers import (
     CreateGatewayPaymentRequestSerializer,
+    MerchantGatewaySettingsSerializer,
     PaymentErrorResponseSerializer,
     PaymentSerializer,
     SSLCommerzSessionResponseSerializer,
@@ -61,7 +63,7 @@ class PaymentViewSet(viewsets.ReadOnlyModelViewSet):
         200: StripeCheckoutResponseSerializer,
         400: OpenApiResponse(
             response=PaymentErrorResponseSerializer,
-            description='Missing invoice_id, invoice already paid, or invalid input',
+            description='Missing invoice_id, invoice already paid, invalid input, or Stripe not configured',
         ),
         404: OpenApiResponse(
             response=PaymentErrorResponseSerializer,
@@ -92,13 +94,15 @@ class CreateStripePaymentView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Create Stripe checkout session
+            # Create Stripe checkout session (uses merchant or platform Stripe secret key)
             checkout_url = StripeService.create_checkout_session(invoice)
 
             return Response({
                 'checkout_url': checkout_url,
                 'invoice_id': invoice.id
             })
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Invoice.DoesNotExist:
             return Response(
                 {'error': 'Invoice not found'},
@@ -178,6 +182,48 @@ class CreateSSLCommerzPaymentView(APIView):
             )
 
 
+@extend_schema(
+    tags=['Payments'],
+    summary='Merchant payment gateway settings',
+    description=(
+        "**SaaS:** Each merchant stores their own Stripe and SSLCommerz credentials.\n\n"
+        "**Stripe:** Set `stripe_publishable_key`, `stripe_secret_key`, and `stripe_webhook_secret`. "
+        "In Stripe Dashboard → Developers → Webhooks, add the **stripe_webhook_url** shown here "
+        "(the path includes your unique id).\n\n"
+        "**SSLCommerz:** Set store id, password, and `sslcommerz_is_live`. Register **sslcommerz_ipn_url** "
+        "as the IPN / notification URL in the SSLCommerz merchant panel.\n\n"
+        "Omit secret fields on PATCH to leave existing encrypted values unchanged."
+    ),
+)
+class MerchantGatewaySettingsView(APIView):
+    """Get or update per-merchant gateway credentials (encrypted at rest)."""
+    permission_classes = [IsAuthenticated, IsBusinessUser]
+
+    @extend_schema(responses={200: MerchantGatewaySettingsSerializer})
+    def get(self, request):
+        gs = get_or_create_merchant_gateway_settings(request.user)
+        serializer = MerchantGatewaySettingsSerializer(gs, context={'request': request})
+        return Response(serializer.data)
+
+    @extend_schema(
+        request=MerchantGatewaySettingsSerializer,
+        responses={200: MerchantGatewaySettingsSerializer},
+    )
+    def patch(self, request):
+        gs = get_or_create_merchant_gateway_settings(request.user)
+        serializer = MerchantGatewaySettingsSerializer(
+            gs,
+            data=request.data,
+            partial=True,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            MerchantGatewaySettingsSerializer(gs, context={'request': request}).data
+        )
+
+
 def _flatten_drf_request_data(request):
     """Normalize DRF parsed body to a plain dict for JSONField storage."""
     data = request.data
@@ -188,10 +234,70 @@ def _flatten_drf_request_data(request):
     return {}
 
 
+def _stripe_webhook_post(request, webhook_secret: str, merchant_user_id=None):
+    """
+    Shared Stripe webhook handler: verify signature, persist WebhookEvent, run domain logic.
+    ``merchant_user_id`` is set for per-tenant URLs so checkout metadata is cross-checked.
+    """
+    payload = request.body
+    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+
+    if not webhook_secret:
+        logger.error('Stripe webhook signing secret is not configured')
+        return Response(
+            {'error': 'Webhook endpoint not configured'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if not sig_header:
+        return Response({'error': 'Missing Stripe-Signature header'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, webhook_secret
+        )
+    except ValueError as exc:
+        logger.warning('Invalid Stripe webhook payload: %s', exc)
+        return Response({'error': 'Invalid payload'}, status=status.HTTP_400_BAD_REQUEST)
+    except stripe.error.SignatureVerificationError as exc:
+        logger.warning('Invalid Stripe webhook signature: %s', exc)
+        return Response({'error': 'Invalid signature'}, status=status.HTTP_400_BAD_REQUEST)
+
+    event_dict = stripe_event_to_dict(event)
+    event_id = event_dict.get('id')
+    event_type = event_dict.get('type', 'unknown')
+
+    if event_id and PaymentGatewayMixin.webhook_event_already_processed_stripe(event_id, None):
+        return Response({'received': True, 'duplicate': True})
+
+    webhook_event = WebhookEvent.objects.create(
+        gateway='stripe',
+        event_type=event_type,
+        payload=event_dict,
+    )
+
+    try:
+        StripeService.process_webhook(webhook_event, merchant_user_id=merchant_user_id)
+    except Exception as exc:
+        logger.exception('Stripe webhook processing failed')
+        webhook_event.error_message = str(exc)[:2000]
+        webhook_event.save(update_fields=['error_message'])
+        return Response({'error': 'Processing failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    webhook_event.processed = True
+    webhook_event.processed_at = timezone.now()
+    webhook_event.save(update_fields=['processed', 'processed_at'])
+
+    return Response({'received': True})
+
+
 @extend_schema(
     tags=['Webhooks'],
-    summary='Stripe webhook',
-    description='Handle Stripe webhook events. This endpoint is called by Stripe.',
+    summary='Stripe webhook (platform / legacy)',
+    description=(
+        "Uses **platform** ``STRIPE_WEBHOOK_SECRET`` from environment. "
+        "For production SaaS, prefer ``/webhooks/stripe/{webhook_public_id}/`` per merchant."
+    ),
     request={
         'type': 'object',
         'description': 'Stripe webhook payload'
@@ -203,68 +309,60 @@ def _flatten_drf_request_data(request):
 )
 @method_decorator(csrf_exempt, name='dispatch')
 class StripeWebhookView(APIView):
-    """Handle Stripe webhook events."""
+    """Legacy Stripe webhook using global signing secret (single-tenant / dev)."""
     authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request):
-        """Verify signature, persist event, update invoice/payment state."""
-        payload = request.body
-        sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
-
         if not settings.STRIPE_WEBHOOK_SECRET:
             logger.error('STRIPE_WEBHOOK_SECRET is not configured')
             return Response(
                 {'error': 'Webhook endpoint not configured'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-
-        if not sig_header:
-            return Response({'error': 'Missing Stripe-Signature header'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
-            )
-        except ValueError as exc:
-            logger.warning('Invalid Stripe webhook payload: %s', exc)
-            return Response({'error': 'Invalid payload'}, status=status.HTTP_400_BAD_REQUEST)
-        except stripe.error.SignatureVerificationError as exc:
-            logger.warning('Invalid Stripe webhook signature: %s', exc)
-            return Response({'error': 'Invalid signature'}, status=status.HTTP_400_BAD_REQUEST)
-
-        event_dict = stripe_event_to_dict(event)
-        event_id = event_dict.get('id')
-        event_type = event_dict.get('type', 'unknown')
-
-        if event_id and PaymentGatewayMixin.webhook_event_already_processed_stripe(event_id, None):
-            return Response({'received': True, 'duplicate': True})
-
-        webhook_event = WebhookEvent.objects.create(
-            gateway='stripe',
-            event_type=event_type,
-            payload=event_dict,
-        )
-
-        try:
-            StripeService.process_webhook(webhook_event)
-        except Exception as exc:
-            logger.exception('Stripe webhook processing failed')
-            webhook_event.error_message = str(exc)[:2000]
-            webhook_event.save(update_fields=['error_message'])
-            return Response({'error': 'Processing failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        webhook_event.processed = True
-        webhook_event.processed_at = timezone.now()
-        webhook_event.save(update_fields=['processed', 'processed_at'])
-
-        return Response({'received': True})
+        return _stripe_webhook_post(request, settings.STRIPE_WEBHOOK_SECRET, merchant_user_id=None)
 
 
 @extend_schema(
     tags=['Webhooks'],
-    summary='SSLCommerz IPN',
-    description='Handle SSLCommerz IPN (Instant Payment Notification). This endpoint is called by SSLCommerz.',
+    summary='Stripe webhook (merchant)',
+    description='Per-merchant Stripe webhook — use the URL from Payment gateway settings.',
+    exclude=True,
+)
+@method_decorator(csrf_exempt, name='dispatch')
+class StripeMerchantWebhookView(APIView):
+    """Stripe webhook scoped to one merchant via ``webhook_public_id`` in the path."""
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request, webhook_key):
+        try:
+            gs = MerchantGatewaySettings.objects.select_related('user').get(
+                webhook_public_id=webhook_key
+            )
+        except MerchantGatewaySettings.DoesNotExist:
+            return Response(
+                {'error': 'Unknown webhook endpoint'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        wh_secret = gs.get_stripe_webhook_secret()
+        if not wh_secret:
+            logger.error('Stripe webhook secret missing for user %s', gs.user_id)
+            return Response(
+                {'error': 'Stripe webhook signing secret not configured for this account'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return _stripe_webhook_post(request, wh_secret, merchant_user_id=gs.user_id)
+
+
+@extend_schema(
+    tags=['Webhooks'],
+    summary='SSLCommerz IPN (platform / legacy)',
+    description=(
+        "Uses **platform** ``SSLCOMMERZ_*`` env credentials. "
+        "For SaaS, register the merchant-specific IPN URL from Payment gateway settings."
+    ),
     request={
         'type': 'object',
         'description': 'SSLCommerz IPN payload'
@@ -276,7 +374,7 @@ class StripeWebhookView(APIView):
 )
 @method_decorator(csrf_exempt, name='dispatch')
 class SSLCommerzWebhookView(APIView):
-    """Handle SSLCommerz IPN (Instant Payment Notification)."""
+    """Legacy SSLCommerz IPN using global store credentials."""
     authentication_classes = []
     permission_classes = [AllowAny]
 
@@ -303,8 +401,65 @@ class SSLCommerzWebhookView(APIView):
             logger.exception('SSLCommerz IPN processing failed')
             webhook_event.error_message = str(exc)[:2000]
             webhook_event.save(update_fields=['error_message'])
-            # Return 200 so SSLCommerz does not retry indefinitely on bad data;
-            # investigate via WebhookEvent.error_message.
+            return Response({'status': 'failed', 'detail': str(exc)[:500]})
+
+        webhook_event.processed = True
+        webhook_event.processed_at = timezone.now()
+        webhook_event.save(update_fields=['processed', 'processed_at'])
+
+        return Response({'status': 'success'})
+
+
+@extend_schema(
+    tags=['Webhooks'],
+    summary='SSLCommerz IPN (merchant)',
+    description='Per-merchant SSLCommerz IPN — use the URL from Payment gateway settings.',
+    exclude=True,
+)
+@method_decorator(csrf_exempt, name='dispatch')
+class SSLCommerzMerchantWebhookView(APIView):
+    """SSLCommerz IPN scoped to one merchant via ``webhook_public_id`` in the path."""
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request, webhook_key):
+        try:
+            gs = MerchantGatewaySettings.objects.select_related('user').get(
+                webhook_public_id=webhook_key
+            )
+        except MerchantGatewaySettings.DoesNotExist:
+            return Response(
+                {'error': 'Unknown webhook endpoint'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not gs.sslcommerz_store_id or not gs.get_sslcommerz_store_password():
+            logger.error('SSLCommerz credentials missing for user %s', gs.user_id)
+            return Response(
+                {'error': 'SSLCommerz credentials not configured for this account'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        payload_dict = _flatten_drf_request_data(request)
+
+        webhook_event = WebhookEvent.objects.create(
+            gateway='sslcommerz',
+            event_type='payment_notification',
+            payload=payload_dict,
+        )
+
+        try:
+            SSLCommerzService.process_ipn(
+                webhook_event,
+                store_id=gs.sslcommerz_store_id.strip(),
+                store_passwd=gs.get_sslcommerz_store_password(),
+                is_live=gs.sslcommerz_is_live,
+                merchant_user_id=gs.user_id,
+            )
+        except Exception as exc:
+            logger.exception('SSLCommerz IPN processing failed')
+            webhook_event.error_message = str(exc)[:2000]
+            webhook_event.save(update_fields=['error_message'])
             return Response({'status': 'failed', 'detail': str(exc)[:500]})
 
         webhook_event.processed = True
