@@ -24,6 +24,9 @@ class StripeCheckoutResponseSerializer(serializers.Serializer):
         help_text="Send the payer’s browser here to complete card payment on Stripe Checkout.",
     )
     invoice_id = serializers.IntegerField(help_text="Same invoice id as in the request.")
+    payment_id = serializers.IntegerField(
+        help_text="Saved Payment row (pending) holding this checkout URL for sharing.",
+    )
 
 
 class SSLCommerzSessionResponseSerializer(serializers.Serializer):
@@ -42,6 +45,9 @@ class SSLCommerzSessionResponseSerializer(serializers.Serializer):
         help_text="SSLCommerz session key when returned by the gateway.",
     )
     invoice_id = serializers.IntegerField(help_text="Same invoice id as in the request.")
+    payment_id = serializers.IntegerField(
+        help_text="Saved Payment row (pending) holding this hosted URL for sharing.",
+    )
 
 
 class PaymentErrorResponseSerializer(serializers.Serializer):
@@ -171,7 +177,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         model = Payment
         fields = (
             'id', 'invoice', 'invoice_number', 'gateway', 'transaction_id',
-            'amount', 'currency', 'status', 'paid_at', 'gateway_response',
+            'amount', 'currency', 'status', 'paid_at', 'payment_url', 'gateway_response',
             'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'created_at', 'updated_at')

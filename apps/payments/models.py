@@ -67,7 +67,13 @@ class Payment(models.Model):
     
     # Additional metadata
     gateway_response = models.JSONField(default=dict, blank=True, help_text='Raw gateway response')
-    
+    # Hosted checkout URL (Stripe Checkout, SSLCommerz GatewayPageURL) while status is pending; cleared when paid.
+    payment_url = models.TextField(
+        blank=True,
+        default='',
+        help_text='Gateway-hosted payment page URL for the payer (saved when the link is generated)',
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

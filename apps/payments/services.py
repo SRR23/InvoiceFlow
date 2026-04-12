@@ -16,11 +16,16 @@ from apps.payments.credential_resolution import (
     resolve_stripe_secret_key,
 )
 from apps.payments.models import Payment
+from apps.payments.payment_link_policy import (
+    assert_may_create_payment_link,
+    stripe_checkout_expires_at_unix,
+)
 from utils.constants import (
     INVOICE_STATUS_PAID,
     PAYMENT_GATEWAY_SSLCOMMERZ,
     PAYMENT_GATEWAY_STRIPE,
     PAYMENT_STATUS_COMPLETED,
+    PAYMENT_STATUS_PENDING,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +81,7 @@ class PaymentGatewayMixin:
                 "currency": currency,
                 "status": PAYMENT_STATUS_COMPLETED,
                 "paid_at": timezone.now(),
+                "payment_url": "",
                 "gateway_response": gateway_response or {},
             },
         )
@@ -89,6 +95,7 @@ class PaymentGatewayMixin:
             payment.gateway_response = gateway_response or {}
             payment.amount = amount
             payment.currency = currency
+            payment.payment_url = ""
             payment.save()
 
         if was_unpaid:
@@ -113,6 +120,55 @@ class PaymentGatewayMixin:
         except Exception as exc:
             logger.warning("Could not queue payment receipt: %s", exc)
 
+    @staticmethod
+    @transaction.atomic
+    def upgrade_pending_ssl_to_completed(
+        invoice,
+        tran_id,
+        val_id,
+        amount,
+        currency,
+        gateway_response,
+    ):
+        """
+        If we stored a pending Payment keyed by merchant ``tran_id``, re-key it to
+        gateway ``val_id`` and mark completed. Otherwise return None so the caller
+        can use ``finalize_successful_payment`` with ``val_id`` only.
+        """
+        locked = Invoice.objects.select_for_update().get(pk=invoice.pk)
+        was_unpaid = locked.status != INVOICE_STATUS_PAID
+
+        pending = Payment.objects.select_for_update().filter(
+            invoice=invoice,
+            gateway=PAYMENT_GATEWAY_SSLCOMMERZ,
+            status=PAYMENT_STATUS_PENDING,
+            transaction_id=str(tran_id),
+        ).first()
+
+        if not pending:
+            return None
+
+        conflict = Payment.objects.filter(transaction_id=val_id).exclude(pk=pending.pk).first()
+        if conflict:
+            if conflict.invoice_id == invoice.id and conflict.status == PAYMENT_STATUS_COMPLETED:
+                return False
+            raise ValueError("SSLCommerz val_id is already associated with another payment")
+
+        pending.transaction_id = val_id
+        pending.status = PAYMENT_STATUS_COMPLETED
+        pending.paid_at = timezone.now()
+        pending.amount = amount
+        pending.currency = currency
+        pending.gateway_response = gateway_response or {}
+        pending.payment_url = ""
+        pending.save()
+
+        if was_unpaid:
+            locked.status = INVOICE_STATUS_PAID
+            locked.save(update_fields=["status"])
+            return True
+        return False
+
 
 class StripeService:
     """Service for handling Stripe payments."""
@@ -130,7 +186,7 @@ class StripeService:
         """
         Create a Stripe checkout session for an invoice.
         Uses the invoice owner's Stripe secret key (merchant settings or platform default).
-        Returns the checkout URL.
+        Returns checkout URL and session id (session id is the gateway transaction reference).
         """
         secret_key = resolve_stripe_secret_key(invoice.user)
         if not secret_key:
@@ -142,6 +198,8 @@ class StripeService:
         stripe.api_key = secret_key
 
         try:
+            assert_may_create_payment_link(invoice)
+            expires_at = stripe_checkout_expires_at_unix(invoice)
             checkout_session = stripe.checkout.Session.create(
                 payment_method_types=["card"],
                 line_items=[
@@ -157,6 +215,7 @@ class StripeService:
                     }
                 ],
                 mode="payment",
+                expires_at=expires_at,
                 success_url=f"{settings.FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
                 cancel_url=f"{settings.FRONTEND_URL}/payment/cancel",
                 metadata={
@@ -166,7 +225,10 @@ class StripeService:
                 },
             )
 
-            return checkout_session.url
+            return {
+                "checkout_url": checkout_session.url,
+                "session_id": checkout_session.id,
+            }
         except Exception as e:
             # Log error
             raise Exception(f"Stripe checkout session creation failed: {str(e)}") from e
@@ -311,6 +373,8 @@ class SSLCommerzService:
         Returns a dict safe to send to the frontend: ``redirect_url`` (GatewayPageURL),
         ``tran_id``, and optional ``session_key``. Store credentials are never included.
         """
+
+        assert_may_create_payment_link(invoice)
 
         store_id, store_password, is_live = resolve_sslcommerz_credentials(invoice.user)
         if not store_id or not store_password:
@@ -521,13 +585,27 @@ class SSLCommerzService:
                 f"Amount mismatch: invoice {invoice.total_amount} vs gateway {paid_decimal}"
             )
 
+        gw_payload = {"ipn": payload, "validated": validated}
+        merged = PaymentGatewayMixin.upgrade_pending_ssl_to_completed(
+            invoice=invoice,
+            tran_id=str(validated_tran),
+            val_id=str(val_id),
+            amount=paid_decimal,
+            currency=currency,
+            gateway_response=gw_payload,
+        )
+        if merged is not None:
+            if merged:
+                PaymentGatewayMixin.send_receipt_async(invoice.id, val_id)
+            return
+
         receipt_send = PaymentGatewayMixin.finalize_successful_payment(
             invoice=invoice,
             gateway=PAYMENT_GATEWAY_SSLCOMMERZ,
             transaction_id=val_id,
             amount=paid_decimal,
             currency=currency,
-            gateway_response={"ipn": payload, "validated": validated},
+            gateway_response=gw_payload,
         )
         if receipt_send:
             PaymentGatewayMixin.send_receipt_async(invoice.id, val_id)

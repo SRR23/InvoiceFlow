@@ -2,6 +2,7 @@ import logging
 
 import stripe
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status, viewsets
@@ -11,6 +12,11 @@ from rest_framework.views import APIView
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 
+from utils.constants import (
+    PAYMENT_GATEWAY_SSLCOMMERZ,
+    PAYMENT_GATEWAY_STRIPE,
+    PAYMENT_STATUS_PENDING,
+)
 from utils.permissions import IsBusinessUser
 from apps.payments.credential_resolution import get_or_create_merchant_gateway_settings
 from .models import MerchantGatewaySettings, Payment, WebhookEvent
@@ -95,12 +101,26 @@ class CreateStripePaymentView(APIView):
                 )
 
             # Create Stripe checkout session (uses merchant or platform Stripe secret key)
-            checkout_url = StripeService.create_checkout_session(invoice)
+            result = StripeService.create_checkout_session(invoice)
+            with transaction.atomic():
+                payment = Payment.objects.create(
+                    invoice=invoice,
+                    gateway=PAYMENT_GATEWAY_STRIPE,
+                    transaction_id=result["session_id"],
+                    amount=invoice.total_amount,
+                    currency=invoice.currency,
+                    status=PAYMENT_STATUS_PENDING,
+                    payment_url=result["checkout_url"],
+                    gateway_response={"checkout_session_id": result["session_id"]},
+                )
 
-            return Response({
-                'checkout_url': checkout_url,
-                'invoice_id': invoice.id
-            })
+            return Response(
+                {
+                    "checkout_url": result["checkout_url"],
+                    "invoice_id": invoice.id,
+                    "payment_id": payment.id,
+                }
+            )
         except ValueError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Invoice.DoesNotExist:
@@ -165,10 +185,26 @@ class CreateSSLCommerzPaymentView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Create SSLCommerz payment session
+            # Create SSLCommerz payment session and persist the hosted URL for sharing
             session_payload = SSLCommerzService.create_payment_session(invoice)
+            with transaction.atomic():
+                payment, _created = Payment.objects.update_or_create(
+                    transaction_id=session_payload["tran_id"],
+                    defaults={
+                        "invoice": invoice,
+                        "gateway": PAYMENT_GATEWAY_SSLCOMMERZ,
+                        "amount": invoice.total_amount,
+                        "currency": invoice.currency,
+                        "status": PAYMENT_STATUS_PENDING,
+                        "payment_url": session_payload["redirect_url"],
+                        "gateway_response": {
+                            "tran_id": session_payload["tran_id"],
+                            "session_key": session_payload.get("session_key"),
+                        },
+                    },
+                )
 
-            return Response(session_payload)
+            return Response({**session_payload, "payment_id": payment.id})
         except ValueError as exc:
             # SSLCommerz returned an error or malformed response
             return Response(

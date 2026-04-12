@@ -1,10 +1,15 @@
 
+from django.db.models import Prefetch
+from django.utils import timezone
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
+
+from apps.payments.models import Payment
+from utils.constants import PAYMENT_STATUS_PENDING
 from drf_spectacular.utils import extend_schema_view, extend_schema, OpenApiResponse
 from utils.permissions import IsBusinessUser
 from .models import Invoice, InvoiceItem
@@ -30,7 +35,23 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         """Return only invoices belonging to the current user."""
-        return Invoice.objects.filter(user=self.request.user).select_related('client')
+        pending_payments = (
+            Payment.objects.filter(status=PAYMENT_STATUS_PENDING)
+            .exclude(payment_url='')
+            .filter(invoice__due_date__gte=timezone.now().date())
+            .order_by('-created_at')
+        )
+        return (
+            Invoice.objects.filter(user=self.request.user)
+            .select_related('client')
+            .prefetch_related(
+                Prefetch(
+                    'payments',
+                    queryset=pending_payments,
+                    to_attr='_prefetched_pending_payment_links',
+                ),
+            )
+        )
     
     def get_serializer_class(self):
         """Use different serializers for create vs retrieve/update."""
