@@ -1,6 +1,7 @@
 
 import uuid
 from django.db import models
+from django.db.models import UniqueConstraint
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from decimal import Decimal
@@ -32,9 +33,8 @@ class Invoice(models.Model):
     )
     invoice_number = models.CharField(
         max_length=50,
-        unique=True,
         db_index=True,
-        help_text='Unique invoice number'
+        help_text='Invoice number unique per user; assigned by the server on create',
     )
     issue_date = models.DateField(help_text='Date when invoice was issued')
     due_date = models.DateField(help_text='Date when invoice payment is due')
@@ -89,6 +89,12 @@ class Invoice(models.Model):
         verbose_name = 'Invoice'
         verbose_name_plural = 'Invoices'
         ordering = ['-created_at']
+        constraints = [
+            UniqueConstraint(
+                fields=('user', 'invoice_number'),
+                name='invoices_user_invoice_number_uniq',
+            ),
+        ]
         indexes = [
             models.Index(fields=['user', '-created_at']),
             models.Index(fields=['client', '-created_at']),

@@ -1,5 +1,6 @@
-
+from django.db import transaction
 from rest_framework import serializers
+from .invoice_numbers import allocate_next_invoice_number
 from .models import Invoice, InvoiceItem
 
 
@@ -26,7 +27,10 @@ class InvoiceSerializer(serializers.ModelSerializer):
             'total_amount', 'currency', 'notes', 'public_id', 'items',
             'created_at', 'updated_at'
         )
-        read_only_fields = ('id', 'subtotal', 'tax', 'total_amount', 'public_id', 'created_at', 'updated_at')
+        read_only_fields = (
+            'id', 'invoice_number', 'subtotal', 'tax', 'total_amount',
+            'public_id', 'created_at', 'updated_at',
+        )
 
 
 class InvoiceCreateSerializer(serializers.ModelSerializer):
@@ -37,18 +41,19 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
         model = Invoice
         fields = (
             'id', 'client', 'invoice_number', 'issue_date', 'due_date',
-            'status', 'discount', 'currency', 'notes', 'items'
+            'status', 'discount', 'currency', 'notes', 'items',
         )
-        read_only_fields = ('id',)
+        read_only_fields = ('id', 'invoice_number')
     
     def create(self, validated_data):
         items_data = validated_data.pop('items')
-        invoice = Invoice.objects.create(**validated_data)
-        
-        for item_data in items_data:
-            InvoiceItem.objects.create(invoice=invoice, **item_data)
-        
-        invoice.calculate_totals()
+        user = validated_data['user']
+        with transaction.atomic():
+            validated_data['invoice_number'] = allocate_next_invoice_number(user)
+            invoice = Invoice.objects.create(**validated_data)
+            for item_data in items_data:
+                InvoiceItem.objects.create(invoice=invoice, **item_data)
+            invoice.calculate_totals()
         return invoice
 
 

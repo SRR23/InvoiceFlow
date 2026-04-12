@@ -16,8 +16,9 @@ app_name = 'payments'
 router = DefaultRouter()
 router.register(r'', PaymentViewSet, basename='payment')
 
+# Specific paths must come before the router: otherwise ``gateway-settings`` is matched as
+# PaymentViewSet detail PK and PATCH returns 405 (ReadOnlyModelViewSet).
 urlpatterns = [
-    path('', include(router.urls)),
     path('gateway-settings/', MerchantGatewaySettingsView.as_view(), name='gateway-settings'),
     path('stripe/create/', CreateStripePaymentView.as_view(), name='stripe-create'),
     path('sslcommerz/create/', CreateSSLCommerzPaymentView.as_view(), name='sslcommerz-create'),
@@ -29,4 +30,5 @@ urlpatterns = [
         name='sslcommerz-webhook-merchant',
     ),
     path('webhooks/sslcommerz/', SSLCommerzWebhookView.as_view(), name='sslcommerz-webhook-legacy'),
+    path('', include(router.urls)),
 ]

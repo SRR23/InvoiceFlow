@@ -56,6 +56,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     company_name = models.CharField(max_length=255, blank=True)
     phone = models.CharField(max_length=20, blank=True)
     currency = models.CharField(max_length=3, default='USD', help_text='ISO 4217 currency code')
+
+    # Next sequence for server-assigned invoice numbers (INV-000001 style), incremented under row lock.
+    invoice_number_next = models.PositiveIntegerField(
+        default=1,
+        help_text='Next numeric suffix for auto-generated invoice numbers for this account',
+    )
     
     objects = UserManager()
     

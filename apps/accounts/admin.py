@@ -14,6 +14,7 @@ class UserAdmin(BaseUserAdmin):
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         ('Personal Info', {'fields': ('first_name', 'last_name', 'company_name', 'phone', 'currency')}),
+        ('Invoicing', {'fields': ('invoice_number_next',)}),
         ('OAuth', {'fields': ('google_id',)}),
         ('Permissions', {'fields': ('is_business_user', 'is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
