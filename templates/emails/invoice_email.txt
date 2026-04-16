@@ -1,0 +1,24 @@
+Invoice {{ invoice_number }} from {{ merchant_name }}
+
+Hello {{ client_name }},
+
+Please review your invoice.
+
+Invoice number: {{ invoice_number }}
+Issue date: {{ issue_date }}
+Due date: {{ due_date }}
+Amount due: {{ total_amount }} {{ currency }}
+
+{% if payment_links %}
+Pay online:
+{% for link in payment_links %}
+- {{ link.gateway_label }}: {{ link.url }}
+{% endfor %}
+{% endif %}
+
+View invoice (details): {{ invoice_url }}
+
+A PDF copy is attached to this email for your records.
+
+---
+This message was sent by {{ merchant_name }}.

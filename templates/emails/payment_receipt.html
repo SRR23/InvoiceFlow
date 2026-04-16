@@ -1,0 +1,16 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Payment received — {{ invoice_number }}{% endblock %}
+{% block header_title %}Payment received{% endblock %}
+{% block header_sub %}<p>Invoice {{ invoice_number }}</p>{% endblock %}
+{% block body %}
+<p>Hello <strong>{{ client_name }}</strong>,</p>
+<p>Thank you — we’ve received your payment. Here’s a summary:</p>
+<div class="meta">
+  <table>
+    <tr><td>Amount paid</td><td><strong>{{ amount }} {{ currency }}</strong></td></tr>
+    <tr><td>Invoice</td><td>{{ invoice_number }}</td></tr>
+    <tr><td>Transaction reference</td><td>{{ transaction_id }}</td></tr>
+  </table>
+</div>
+<p>We appreciate your business.</p>
+{% endblock %}

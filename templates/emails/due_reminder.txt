@@ -1,0 +1,13 @@
+Reminder: Invoice {{ invoice_number }}
+
+Hello {{ client_name }},
+
+This is a reminder that your invoice {{ invoice_number }} is{% if is_overdue %} overdue{% else %} due{% endif %}.
+
+Amount: {{ total_amount }} {{ currency }}
+Due date: {{ due_date }}
+
+Pay or view online: {{ invoice_url }}
+
+---
+This message was sent by {{ merchant_name }}.

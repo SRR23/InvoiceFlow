@@ -1,0 +1,14 @@
+Payment confirmation — Invoice {{ invoice_number }}
+
+Hello {{ client_name }},
+
+Thank you — we've received your payment.
+
+Amount paid: {{ amount }} {{ currency }}
+Invoice: {{ invoice_number }}
+Transaction reference: {{ transaction_id }}
+
+We appreciate your business.
+
+---
+This message was sent by {{ merchant_name }}.

@@ -27,6 +27,7 @@ requests>=2.31.0
 python-decouple>=3.8
 cryptography>=42.0.0
 Pillow>=10.0.0
+reportlab>=4.0.0
 
 # Filtering
 django-filter>=23.3
@@ -37,7 +38,12 @@ drf-spectacular>=0.27.0
 # Environment
 python-dotenv>=1.0.0
 
+# Database URL parsing
 dj-database-url>=0.5.0
 
+# Google API Client
 google-auth 
 google-auth-oauthlib
+
+# Email Service
+resend>=2.0.0

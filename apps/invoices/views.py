@@ -12,6 +12,7 @@ from apps.payments.models import Payment
 from utils.constants import PAYMENT_STATUS_PENDING
 from drf_spectacular.utils import extend_schema_view, extend_schema, OpenApiResponse
 from utils.permissions import IsBusinessUser
+from apps.notifications.tasks import send_invoice_email
 from .models import Invoice, InvoiceItem
 from .serializers import (
     InvoiceSerializer,
@@ -66,15 +67,29 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     @extend_schema(
         tags=['Invoices'],
         summary='Send invoice via email',
-        description='Send invoice to client via email. Triggers a Celery background task.',
-        responses={200: OpenApiResponse(description='Email queued successfully')}
+        description=(
+            'Queues a Celery task to email the client a link to the invoice. '
+            'Requires the client to have an email address.'
+        ),
+        responses={
+            200: OpenApiResponse(description='Email queued successfully'),
+            400: OpenApiResponse(description='Client has no email or invoice cannot be sent'),
+        },
     )
     @action(detail=True, methods=['post'])
     def send_email(self, request, pk=None):
-        """Send invoice via email (Celery task)."""
+        """Queue Celery task to send invoice email to the client."""
         invoice = self.get_object()
-        # TODO: Trigger Celery task to send email
-        return Response({'message': 'Invoice email will be sent shortly'})
+        if not invoice.client.email:
+            return Response(
+                {'error': 'Client has no email address; add one on the client record first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        send_invoice_email.delay(invoice.id)
+        return Response(
+            {'message': 'Invoice email has been queued and will be sent shortly.'},
+            status=status.HTTP_200_OK,
+        )
     
     @extend_schema(
         tags=['Invoices'],

@@ -1,0 +1,28 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Invoice {{ invoice_number }}{% endblock %}
+{% block header_title %}Invoice {{ invoice_number }}{% endblock %}
+{% block header_sub %}<p>From {{ merchant_name }}</p>{% endblock %}
+{% block body %}
+<p>Hello <strong>{{ client_name }}</strong>,</p>
+<p>Please review your invoice below. You can view details and pay using the links.</p>
+<div class="meta">
+  <table>
+    <tr><td>Invoice number</td><td><strong>{{ invoice_number }}</strong></td></tr>
+    <tr><td>Issue date</td><td>{{ issue_date }}</td></tr>
+    <tr><td>Due date</td><td>{{ due_date }}</td></tr>
+    <tr><td>Amount due</td><td><strong>{{ total_amount }} {{ currency }}</strong></td></tr>
+  </table>
+</div>
+{% if payment_links %}
+<p style="margin-top:20px;"><strong>Pay online</strong></p>
+<ul style="margin:0 0 16px;padding-left:20px;color:#334155;font-size:14px;">
+  {% for link in payment_links %}
+  <li style="margin-bottom:10px;"><a href="{{ link.url }}" style="color:#059669;font-weight:600;">{{ link.gateway_label }} — open payment page</a></li>
+  {% endfor %}
+</ul>
+{% endif %}
+<p style="text-align:center;">
+  <a class="btn" href="{{ invoice_url }}">View invoice</a>
+</p>
+<p style="font-size:13px;color:#64748b;">A PDF copy is attached to this email for your records.</p>
+{% endblock %}

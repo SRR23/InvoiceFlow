@@ -1,0 +1,17 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Reminder: Invoice {{ invoice_number }}{% endblock %}
+{% block header_title %}Payment reminder{% endblock %}
+{% block header_sub %}<p>Invoice {{ invoice_number }}</p>{% endblock %}
+{% block body %}
+<p>Hello <strong>{{ client_name }}</strong>,</p>
+<p>This is a friendly reminder that the following balance is{% if is_overdue %} overdue{% else %} due{% endif %}:</p>
+<div class="meta">
+  <table>
+    <tr><td>Amount</td><td><strong>{{ total_amount }} {{ currency }}</strong></td></tr>
+    <tr><td>Due date</td><td>{{ due_date }}</td></tr>
+  </table>
+</div>
+<p style="text-align:center;">
+  <a class="btn" href="{{ invoice_url }}">View &amp; pay</a>
+</p>
+{% endblock %}

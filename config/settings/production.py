@@ -20,9 +20,6 @@ X_FRAME_OPTIONS = 'DENY'
 # Production CORS - must be explicit
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
 
-# Production email backend
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-
 # Production logging
 LOGGING['handlers']['file']['filename'] = '/var/log/invoiceflow/django.log'
 LOGGING['loggers']['apps']['level'] = 'INFO'
