@@ -21,8 +21,8 @@ X_FRAME_OPTIONS = 'DENY'
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
 
 # Production logging
-LOGGING['handlers']['file']['filename'] = '/var/log/invoiceflow/django.log'
-LOGGING['loggers']['apps']['level'] = 'INFO'
+# LOGGING['handlers']['file']['filename'] = '/var/log/invoiceflow/django.log'
+# LOGGING['loggers']['apps']['level'] = 'INFO'
 
 # Enable SSLCommerz live mode in production
 SSLCOMMERZ_IS_LIVE = True
