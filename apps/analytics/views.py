@@ -31,12 +31,12 @@ class DashboardStatsView(APIView):
     
     def get(self, request):
         """Get or create analytics for the user, with caching."""
-        cache_key = f"dashboard_stats_{request.user.id}"
-        cached_data = cache.get(cache_key)
+        # cache_key = f"dashboard_stats_{request.user.id}"
+        # cached_data = cache.get(cache_key)
         
-        if cached_data:
-            serializer = InvoiceAnalyticsSerializer(cached_data)
-            return Response(serializer.data)
+        # if cached_data:
+        #     serializer = InvoiceAnalyticsSerializer(cached_data)
+        #     return Response(serializer.data)
         
         # Get or create analytics
         analytics, created = InvoiceAnalytics.objects.get_or_create(user=request.user)
@@ -47,7 +47,7 @@ class DashboardStatsView(APIView):
             analytics.refresh_from_db()
         
         # Cache for 10 minutes
-        cache.set(cache_key, analytics, 600)
+        # cache.set(cache_key, analytics, 600)
         
         serializer = InvoiceAnalyticsSerializer(analytics)
         return Response(serializer.data)
