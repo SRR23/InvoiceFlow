@@ -26,6 +26,7 @@ from utils.constants import (
     PAYMENT_GATEWAY_STRIPE,
     PAYMENT_STATUS_COMPLETED,
     PAYMENT_STATUS_PENDING,
+    SAAS_SUBSCRIPTION_CHECKOUT_PURPOSE,
 )
 
 logger = logging.getLogger(__name__)
@@ -256,7 +257,34 @@ class StripeService:
 
         if event_type in StripeService._CHECKOUT_SUCCESS_TYPES:
             session = payload.get("data", {}).get("object") or {}
+            if (session.get("mode") or "").lower() == "subscription":
+                meta = session.get("metadata") or {}
+                if meta.get("checkout_purpose") == SAAS_SUBSCRIPTION_CHECKOUT_PURPOSE:
+                    from apps.subscription.services import (
+                        apply_subscription_checkout_completed,
+                    )
+
+                    apply_subscription_checkout_completed(session)
+                else:
+                    logger.debug(
+                        "Stripe checkout.session subscription mode ignored (not SaaS checkout)"
+                    )
+                return
             StripeService._handle_checkout_session_success(session, merchant_user_id=merchant_user_id)
+            return
+
+        if event_type == "customer.subscription.updated":
+            sub_obj = payload.get("data", {}).get("object") or {}
+            from apps.subscription.services import sync_subscription_from_stripe_payload
+
+            sync_subscription_from_stripe_payload(sub_obj)
+            return
+
+        if event_type == "customer.subscription.deleted":
+            sub_obj = payload.get("data", {}).get("object") or {}
+            from apps.subscription.services import mark_subscription_deleted
+
+            mark_subscription_deleted(sub_obj)
             return
 
         # Other event types are acknowledged without action (subscription, etc.).

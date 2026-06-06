@@ -21,6 +21,7 @@ urlpatterns = [
     
     # Custom API Endpoints
     path('api/auth/', include('apps.accounts.urls')),
+    path('api/auth/', include('apps.subscription.urls')),
     path('api/clients/', include('apps.clients.urls')),
     path('api/invoices/', include('apps.invoices.urls')),
     path('api/payments/', include('apps.payments.urls')),

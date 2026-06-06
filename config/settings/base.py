@@ -47,6 +47,7 @@ LOCAL_APPS = [
     'apps.payments',
     'apps.analytics',
     'apps.notifications',
+    'apps.subscription',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -163,8 +164,12 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    # Business APIs: subscription/trial gate (see utils.permissions.IsBusinessUser).
+    # Opt out per-view with permission_classes = [IsAuthenticated] (e.g. logout, SaaS checkout/status)
+    # or [AllowAny] (auth, webhooks, public invoice).
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
+        'utils.permissions.IsBusinessUser',
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
@@ -252,6 +257,8 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@mail.shaidur.
 STRIPE_PUBLIC_KEY = os.environ.get('STRIPE_PUBLIC_KEY', '')
 STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '')
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
+# Business-user trial length when the account is first created (days)
+DEFAULT_TRIAL_DAYS = int(os.environ.get('DEFAULT_TRIAL_DAYS', '30'))
 
 SSLCOMMERZ_STORE_ID = os.environ.get('SSLCOMMERZ_STORE_ID', '')
 SSLCOMMERZ_STORE_PASSWORD = os.environ.get('SSLCOMMERZ_STORE_PASSWORD', '')

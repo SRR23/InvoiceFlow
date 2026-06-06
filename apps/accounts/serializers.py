@@ -5,6 +5,10 @@ from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from .models import User
 
+# Loose bounds; service normalizes to exactly 6 digits.
+OTP_INPUT_MIN_LEN = 4
+OTP_INPUT_MAX_LEN = 32
+
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     """Serializer for user registration."""
@@ -50,8 +54,67 @@ class LogoutSerializer(serializers.Serializer):
     
 class UserProfileSerializer(serializers.ModelSerializer):
     """Serializer for user profile."""
-    
+
+    has_active_app_access = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ('id', 'email', 'first_name', 'last_name', 'company_name', 'phone', 'currency', 'is_business_user', 'date_joined')
-        read_only_fields = ('id', 'email', 'is_business_user', 'date_joined')
+        fields = (
+            'id',
+            'email',
+            'first_name',
+            'last_name',
+            'company_name',
+            'phone',
+            'currency',
+            'is_business_user',
+            'date_joined',
+            'trial_ends_at',
+            'subscription_status',
+            'has_active_app_access',
+        )
+        read_only_fields = (
+            'id',
+            'email',
+            'is_business_user',
+            'date_joined',
+            'trial_ends_at',
+            'subscription_status',
+            'has_active_app_access',
+        )
+
+    def get_has_active_app_access(self, obj: User) -> bool:
+        return obj.has_active_app_access()
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """Step 1: user submits account email to receive an OTP."""
+
+    email = serializers.EmailField(required=True)
+
+
+class PasswordResetVerifySerializer(serializers.Serializer):
+    """Step 2: user submits email + OTP from the message."""
+
+    email = serializers.EmailField(required=True)
+    otp = serializers.CharField(
+        required=True,
+        trim_whitespace=True,
+        min_length=OTP_INPUT_MIN_LEN,
+        max_length=OTP_INPUT_MAX_LEN,
+    )
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """Step 3: user submits signed token from step 2 plus new password (twice)."""
+
+    password_reset_token = serializers.CharField(required=True, write_only=True)
+    password = serializers.CharField(required=True, write_only=True)
+    password2 = serializers.CharField(required=True, write_only=True)
+
+    def validate(self, attrs):
+        if attrs["password"] != attrs["password2"]:
+            raise serializers.ValidationError(
+                {"password": "Password fields didn't match."}
+            )
+        return attrs

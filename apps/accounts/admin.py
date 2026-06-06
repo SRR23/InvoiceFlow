@@ -6,7 +6,18 @@ from .models import User
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
    
-    list_display = ('email', 'first_name', 'last_name', 'company_name', 'is_business_user', 'is_staff', 'is_active', 'date_joined')
+    list_display = (
+        'email',
+        'first_name',
+        'last_name',
+        'company_name',
+        'is_business_user',
+        'trial_ends_at',
+        'subscription_status',
+        'is_staff',
+        'is_active',
+        'date_joined',
+    )
     list_filter = ('is_business_user', 'is_staff', 'is_active', 'date_joined')
     search_fields = ('email', 'first_name', 'last_name', 'company_name')
     ordering = ('-date_joined',)
@@ -15,6 +26,7 @@ class UserAdmin(BaseUserAdmin):
         (None, {'fields': ('email', 'password')}),
         ('Personal Info', {'fields': ('first_name', 'last_name', 'company_name', 'phone', 'currency')}),
         ('Invoicing', {'fields': ('invoice_number_next',)}),
+        ('SaaS subscription', {'fields': ('trial_ends_at', 'subscription_status', 'stripe_customer_id', 'stripe_subscription_id')}),
         ('OAuth', {'fields': ('google_id',)}),
         ('Permissions', {'fields': ('is_business_user', 'is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),

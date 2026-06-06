@@ -43,6 +43,30 @@ PAYMENT_STATUS_CHOICES = [
     (PAYMENT_STATUS_REFUNDED, 'Refunded'),
 ]
 
+# SaaS subscription (Stripe) — stored on User; mirrors Stripe subscription.status where applicable
+SUBSCRIPTION_STATUS_NONE = 'none'
+SUBSCRIPTION_STATUS_ACTIVE = 'active'
+SUBSCRIPTION_STATUS_TRIALING = 'trialing'
+SUBSCRIPTION_STATUS_PAST_DUE = 'past_due'
+SUBSCRIPTION_STATUS_CANCELED = 'canceled'
+SUBSCRIPTION_STATUS_UNPAID = 'unpaid'
+SUBSCRIPTION_STATUS_INCOMPLETE = 'incomplete'
+SUBSCRIPTION_STATUS_INCOMPLETE_EXPIRED = 'incomplete_expired'
+
+SUBSCRIPTION_STATUS_CHOICES = [
+    (SUBSCRIPTION_STATUS_NONE, 'None'),
+    (SUBSCRIPTION_STATUS_ACTIVE, 'Active'),
+    (SUBSCRIPTION_STATUS_TRIALING, 'Trialing'),
+    (SUBSCRIPTION_STATUS_PAST_DUE, 'Past due'),
+    (SUBSCRIPTION_STATUS_CANCELED, 'Canceled'),
+    (SUBSCRIPTION_STATUS_UNPAID, 'Unpaid'),
+    (SUBSCRIPTION_STATUS_INCOMPLETE, 'Incomplete'),
+    (SUBSCRIPTION_STATUS_INCOMPLETE_EXPIRED, 'Incomplete expired'),
+]
+
+# Checkout Session metadata: platform SaaS billing (not invoice payment)
+SAAS_SUBSCRIPTION_CHECKOUT_PURPOSE = 'saas_subscription'
+
 # Currency Codes (ISO 4217)
 CURRENCY_USD = 'USD'
 CURRENCY_EUR = 'EUR'

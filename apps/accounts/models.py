@@ -1,7 +1,11 @@
+from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
 from django.utils import timezone
+
+from utils.constants import SUBSCRIPTION_STATUS_NONE
 
 
 class UserManager(BaseUserManager):
@@ -62,7 +66,22 @@ class User(AbstractBaseUser, PermissionsMixin):
         default=1,
         help_text='Next numeric suffix for auto-generated invoice numbers for this account',
     )
-    
+
+    # SaaS subscription (platform Stripe). Trial is set on first save for new business users.
+    trial_ends_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Business features allowed before this instant without a paid Stripe subscription.',
+    )
+    stripe_customer_id = models.CharField(max_length=255, blank=True, default='')
+    stripe_subscription_id = models.CharField(max_length=255, blank=True, default='')
+    subscription_status = models.CharField(
+        max_length=32,
+        default=SUBSCRIPTION_STATUS_NONE,
+        db_index=True,
+        help_text='Stripe subscription.status (e.g. active, canceled) or none for the monthly SaaS plan.',
+    )
+
     objects = UserManager()
     
     USERNAME_FIELD = 'email'
@@ -87,3 +106,60 @@ class User(AbstractBaseUser, PermissionsMixin):
     def get_short_name(self):
         """Return the short name for the user."""
         return self.first_name or self.email
+
+    def save(self, *args, **kwargs):
+        """Start a trial window for new business accounts (not staff/superuser)."""
+        if (
+            self._state.adding
+            and self.trial_ends_at is None
+            and self.is_business_user
+            and not (self.is_staff or self.is_superuser)
+        ):
+            days = int(getattr(settings, 'DEFAULT_TRIAL_DAYS', 30))
+            self.trial_ends_at = timezone.now() + timedelta(days=days)
+        super().save(*args, **kwargs)
+
+    def has_active_app_access(self) -> bool:
+        """
+        Business APIs require trial OR an active-enough Stripe subscription.
+        Staff/superuser always allowed; non-business users are not gated here.
+        """
+        from utils.constants import (
+            SUBSCRIPTION_STATUS_ACTIVE,
+            SUBSCRIPTION_STATUS_TRIALING,
+        )
+
+        if not self.is_business_user:
+            return True
+        if self.is_staff or self.is_superuser:
+            return True
+        now = timezone.now()
+        if self.trial_ends_at and now < self.trial_ends_at:
+            return True
+        return self.subscription_status in (SUBSCRIPTION_STATUS_ACTIVE, SUBSCRIPTION_STATUS_TRIALING)
+
+
+class PasswordResetOTP(models.Model):
+    """
+    Short-lived hashed OTP for forgot-password flow (one active row per user).
+    """
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="password_reset_otps",
+    )
+    otp_hash = models.CharField(max_length=64)
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "password_reset_otps"
+        indexes = [
+            models.Index(fields=["user", "-created_at"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    def __str__(self):
+        return f"PasswordResetOTP(user_id={self.user_id})"

@@ -6,18 +6,24 @@ from rest_framework import permissions
 
 class IsBusinessUser(permissions.BasePermission):
     """
-    Permission to check if user is a business user.
-    Only business users can access business APIs.
+    Permission for business APIs: must be a business user, and either in the free trial
+    window or on an active-enough Stripe SaaS subscription (staff/superuser exempt).
     """
     message = "Only business users can access this resource."
-    
+
     def has_permission(self, request, view):
-        """Check if user is authenticated and is a business user."""
-        return (
-            request.user and
-            request.user.is_authenticated and
-            request.user.is_business_user
-        )
+        self.message = "Only business users can access this resource."
+        if not (request.user and request.user.is_authenticated and request.user.is_business_user):
+            return False
+        if request.user.is_staff or request.user.is_superuser:
+            return True
+        if not request.user.has_active_app_access():
+            self.message = (
+                "Your trial has ended or your subscription is inactive. "
+                "Subscribe to continue using InvoiceFlow."
+            )
+            return False
+        return True
 
 
 class IsOwner(permissions.BasePermission):

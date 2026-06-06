@@ -1,10 +1,12 @@
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
+
+from utils.permissions import IsBusinessUser
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.contrib.auth import authenticate
 from drf_spectacular.utils import (
     extend_schema, 
     OpenApiResponse, 
@@ -12,20 +14,33 @@ from drf_spectacular.utils import (
     OpenApiExample
 )
 from .models import User
+from .services.password_reset_service import (
+    request_password_reset_otp,
+    reset_password_with_token,
+    verify_otp_and_issue_token,
+)
 from .serializers import (
     UserRegistrationSerializer, 
     UserProfileSerializer, 
     LoginSerializer,
-    LogoutSerializer
+    LogoutSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetVerifySerializer,
+    PasswordResetConfirmSerializer,
 )
 from .services.google_auth import (
     verify_google_id_token,
     get_or_create_google_user,
-    generate_jwt_for_user
+    generate_jwt_for_user,
 )
-
 import logging
+
 logger = logging.getLogger(__name__)
+
+
+PASSWORD_RESET_REQUEST_MESSAGE = (
+    "If an account exists for this email, a verification code will be sent shortly."
+)
 
 
 @extend_schema(
@@ -265,6 +280,7 @@ class GoogleLoginAPIView(APIView):
     },
 )
 class LogoutView(APIView):
+    # Must not use IsBusinessUser: expired trial users still need to revoke refresh tokens.
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -292,6 +308,109 @@ class LogoutView(APIView):
             )
 
 
+@extend_schema(
+    tags=['Authentication'],
+    summary='Forgot password (request OTP)',
+    description=(
+        'Sends a one-time code to the email if an active account exists. '
+        'Same response whether or not the account exists.'
+    ),
+    request=PasswordResetRequestSerializer,
+    responses={
+        200: OpenApiResponse(description='Request accepted'),
+        400: OpenApiResponse(description='Validation or rate limit'),
+        503: OpenApiResponse(description='Email delivery failed'),
+    },
+)
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        try:
+            request_password_reset_otp(email)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            logger.exception('Password reset request: email delivery failed')
+            return Response(
+                {
+                    'detail': (
+                        'Unable to send email right now. Please try again in a few minutes.'
+                    ),
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response({'detail': PASSWORD_RESET_REQUEST_MESSAGE}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['Authentication'],
+    summary='Forgot password (verify OTP)',
+    description=(
+        'Checks the OTP from email. Returns a short-lived ``password_reset_token`` '
+        'for the confirm step.'
+    ),
+    request=PasswordResetVerifySerializer,
+    responses={
+        200: OpenApiResponse(description='OTP OK; token issued'),
+        400: OpenApiResponse(description='Invalid or expired OTP'),
+    },
+)
+class PasswordResetVerifyView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordResetVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        otp = serializer.validated_data['otp']
+        try:
+            reset_token = verify_otp_and_issue_token(email, otp)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                'detail': 'Code verified. Use password_reset_token to set your new password.',
+                'password_reset_token': reset_token,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    tags=['Authentication'],
+    summary='Forgot password (set new password)',
+    description='Submit the ``password_reset_token`` from verify-OTP plus new password.',
+    request=PasswordResetConfirmSerializer,
+    responses={
+        200: OpenApiResponse(description='Password updated'),
+        400: OpenApiResponse(description='Invalid token or validation error'),
+    },
+)
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token = serializer.validated_data['password_reset_token']
+        password = serializer.validated_data['password']
+        try:
+            reset_password_with_token(token, password)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except DjangoValidationError as exc:
+            messages = getattr(exc, 'messages', None) or []
+            payload = {'password': list(messages) if messages else [str(exc)]}
+            return Response(payload, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {'detail': 'Password has been reset. You can sign in with your new password.'},
+            status=status.HTTP_200_OK,
+        )
+
 
 @extend_schema(
     tags=['Authentication'],
@@ -301,7 +420,7 @@ class LogoutView(APIView):
 )
 class UserProfileView(APIView):
     """User profile view and update endpoint."""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsBusinessUser]
     
     def get(self, request):
         """Get user profile."""
