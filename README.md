@@ -9,8 +9,9 @@ A production-ready Django REST Framework backend for a SaaS invoice and billing 
 - ✅ Invoice creation and management
 - ✅ Invoice items with tax calculation
 - ✅ Public invoice links for clients
-- ✅ Payment processing (Stripe & SSLCommerz)
-- ✅ Webhook handling for payment gateways
+- ✅ Payment processing (Stripe & SSLCommerz) for client invoice payments
+- ✅ **SaaS subscriptions** (Stripe Checkout) with packages, trial, and access gating
+- ✅ Webhook handling for payment gateways (invoice payments + platform subscription)
 - ✅ Analytics and dashboard stats
 - ✅ Email notifications via Celery
 - ✅ Redis caching
@@ -48,7 +49,8 @@ invoice_saas/
 │   ├── accounts/            # User authentication & profiles
 │   ├── clients/            # Client management
 │   ├── invoices/           # Invoice & invoice items
-│   ├── payments/           # Payment processing
+│   ├── payments/           # Client invoice payments + Stripe webhooks
+│   ├── subscription/       # SaaS plans, trial, Stripe subscription checkout
 │   ├── analytics/          # Dashboard & analytics
 │   └── notifications/      # Email notifications (Celery tasks)
 │
@@ -94,9 +96,12 @@ cp .env.example .env
 Edit `.env` with your configuration:
 - Database credentials
 - Redis URL
-- Stripe keys
+- Stripe keys (platform key is also used for SaaS subscription Checkout)
 - SSLCommerz credentials
 - Email settings
+- `DEFAULT_TRIAL_DAYS` (optional; default 30) — trial length for new business users
+
+After migrate, create at least one active `SubscriptionPackage` in the admin/DB (Checkout reads price from that row via Stripe `price_data`).
 
 ### 4. Database Setup
 
@@ -179,6 +184,12 @@ Once the server is running, visit:
 - `POST /api/auth/token/refresh/` - Refresh JWT token
 - `GET /api/auth/profile/` - Get user profile
 
+### SaaS Subscription
+- `GET /api/auth/subscription/status/` - Trial end, Stripe status, and whether business APIs are allowed (auth required; not gated by trial/subscription so paywall UI can work)
+- `POST /api/auth/subscription/checkout/` - Start Stripe Checkout (`mode=subscription`) for an active `SubscriptionPackage` (optional body: `package_code`)
+
+Subscription lifecycle is synced via the existing Stripe webhook (`/api/payments/webhooks/stripe/`) for `checkout.session.completed` and `customer.subscription.*`. There is no in-app cancel/downgrade API (manage in Stripe if needed).
+
 ### Clients
 - `GET /api/clients/` - List clients
 - `POST /api/clients/` - Create client
@@ -223,6 +234,8 @@ Once the server is running, visit:
 - Email-based authentication
 - Google OAuth support
 - Business user flag (`is_business_user`)
+- SaaS fields: `trial_ends_at`, `stripe_customer_id`, `stripe_subscription_id`, `subscription_status`
+- New business users get a trial window (`DEFAULT_TRIAL_DAYS`) on first save
 
 ### Client
 - Belongs to a business user
@@ -248,10 +261,25 @@ Once the server is running, visit:
 - Logs payment gateway webhooks
 - Helps with debugging
 
+### SubscriptionPackage / SubscriptionFeature
+- Sellable SaaS plans (`code`, `price`, `currency`, `billing_cycle`) and optional feature bullets
+- Checkout builds Stripe `price_data` from an active package (no fixed Stripe Price ID required in env)
+
+### Subscription / SubscriptionInvoice
+- Internal per-user subscription rows and period billing documents (package snapshots)
+
 ## Permissions
 
-- **IsBusinessUser**: Only business users can access business APIs
+- **IsBusinessUser**: Business users only; also requires an active trial **or** Stripe subscription status `active` / `trialing` (staff/superuser exempt). Status/checkout endpoints intentionally skip this gate so expired users can still subscribe.
 - **IsOwner**: Users can only access their own resources
+
+## SaaS Subscription Flow (brief)
+
+1. Business user registers → `trial_ends_at` is set from `DEFAULT_TRIAL_DAYS`.
+2. While trial (or paid `active`/`trialing`) is valid, business APIs work.
+3. Client calls `POST /api/auth/subscription/checkout/` (optional `package_code`) → Stripe-hosted Checkout.
+4. Platform Stripe webhook updates the user’s `stripe_*` fields and `subscription_status`.
+5. When trial ends and subscription is not active/trialing, business APIs return a paywall-style permission error.
 
 ## Celery Tasks
 
