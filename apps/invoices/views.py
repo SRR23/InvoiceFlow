@@ -46,6 +46,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             Invoice.objects.filter(user=self.request.user)
             .select_related('client')
             .prefetch_related(
+                'items',
                 Prefetch(
                     'payments',
                     queryset=pending_payments,
