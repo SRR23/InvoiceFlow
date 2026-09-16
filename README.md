@@ -309,8 +309,15 @@ Set `DJANGO_SETTINGS_MODULE` environment variable or update `manage.py` to switc
 
 ## Testing
 
+Uses `config.settings.development` and local Postgres (`DB_*` from `.env`).
+`DATABASE_URL` is ignored during pytest so a remote host is never used for `test_*` DBs.
+
 ```bash
+# Ensure local Postgres is reachable with DB_* credentials, then:
 pytest
+
+# Optional coverage:
+pytest --cov=apps --cov=utils
 ```
 
 ## License
