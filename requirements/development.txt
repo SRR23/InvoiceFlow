@@ -6,7 +6,7 @@ ipython>=8.15.0
 django-debug-toolbar>=4.2.0
 django-extensions>=3.2.0
 
-# Testing
+# Testing is belongs to development.txt
 pytest>=7.4.0
 pytest-django>=4.7.0
 pytest-cov>=4.1.0
