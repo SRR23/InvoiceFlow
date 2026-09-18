@@ -172,7 +172,8 @@ docker compose --env-file .env.docker down
 - `RUN_MIGRATIONS=0` on Celery worker/beat services
 - Plus `SECRET_KEY`, `ALLOWED_HOSTS`, Redis/Celery URLs, Stripe, etc.
 
-Default web command (from Dockerfile): `gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2`  
+Default web command (from Dockerfile): gunicorn on `0.0.0.0:$PORT` (Render sets `PORT`; local default `8000`)
+  
 Worker example command: `celery -A config worker --loglevel=info`
 
 ## API Documentation
