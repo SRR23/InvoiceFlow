@@ -134,6 +134,47 @@ celery -A config worker -l info
 celery -A config beat -l info
 ```
 
+### 8. Docker Compose (full local stack)
+
+Runs **web + Celery worker + Celery beat + Postgres + Redis** together.
+
+```bash
+cp .env.docker.example .env.docker
+# Optional: copy Stripe/email keys from your real .env into .env.docker
+
+docker compose --env-file .env.docker up --build
+```
+
+- API: http://localhost:8000  
+- Swagger: http://localhost:8000/api/docs/  
+- Compose Postgres is published on host port **5433** (avoids clashing with local Postgres on 5432)  
+- Compose Redis is published on host port **6380** (avoids clashing with local Redis on 6379)  
+- Inside the Docker network, services still use `db:5432` and `redis:6379`  
+- Containers **clear `DATABASE_URL`** and use service `db`, so Neon is not used by this stack  
+
+Create a superuser:
+
+```bash
+docker compose --env-file .env.docker exec web python manage.py createsuperuser
+```
+
+Stop:
+
+```bash
+docker compose --env-file .env.docker down
+```
+
+**Render (Docker web service):** set the service to **Docker** (Dockerfile at repo root). Do **not** use `docker-compose.yml` on Render. Important env vars:
+
+- `DATABASE_URL` = Neon connection string (entrypoint skips waiting for Compose host `db`)
+- `DJANGO_SETTINGS_MODULE=config.settings.production`
+- `RUN_MIGRATIONS=1` on the **web** service (migrate + collectstatic on boot)
+- `RUN_MIGRATIONS=0` on Celery worker/beat services
+- Plus `SECRET_KEY`, `ALLOWED_HOSTS`, Redis/Celery URLs, Stripe, etc.
+
+Default web command (from Dockerfile): `gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2`  
+Worker example command: `celery -A config worker --loglevel=info`
+
 ## API Documentation
 
 The project includes interactive API documentation using Swagger/OpenAPI.
