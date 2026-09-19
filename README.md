@@ -134,7 +134,15 @@ celery -A config worker -l info
 celery -A config beat -l info
 ```
 
-### 8. Docker Compose (full local stack)
+### 8. CI (GitHub Actions)
+
+Workflow: `.github/workflows/ci.yml`
+
+- Runs `pytest` with a temporary Postgres service on every push/PR
+- Does **not** use Neon
+- On Render, set **Auto-Deploy → After CI Checks Pass** so deploy happens only after the `CI / test` check is green
+
+### 9. Docker Compose (full local stack)
 
 Runs **web + Celery worker + Celery beat + Postgres + Redis** together.
 
@@ -368,4 +376,4 @@ MIT
 
 ## Author
 
-InvoiceFlow Development Team
+Shaidur Rahman
